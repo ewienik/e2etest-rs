@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+mod dns;
 mod tests;
 
 use clap::Parser;
+use dns::DnsExt;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -18,6 +20,9 @@ use tracing_subscriber::prelude::*;
 #[derive(Debug, Parser)]
 #[clap(version)]
 struct Args {
+    #[arg(short, long, default_value = "127.0.1.1")]
+    dns_ip: Ipv4Addr,
+
     #[arg(short, long, default_value = "127.0.2.1")]
     base_ip: Ipv4Addr,
 }
@@ -47,6 +52,15 @@ impl ServicesSubnet {
     }
 }
 
+fn validate_different_subnet(dns_ip: Ipv4Addr, base_ip: Ipv4Addr) {
+    let dns_octets = dns_ip.octets();
+    let base_octets = base_ip.octets();
+    assert!(
+        dns_octets[1] != base_octets[1] || dns_octets[2] != base_octets[2],
+        "DNS server should serve addresses from a different subnet than its own"
+    );
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     tracing_subscriber::registry()
@@ -60,19 +74,26 @@ async fn main() {
 
     let args = Args::parse();
 
+    validate_different_subnet(args.dns_ip, args.base_ip);
+
     let services_subnet = Arc::new(ServicesSubnet::new(args.base_ip));
+    let dns = dns::new(args.dns_ip).await;
 
     info!(
         "{} version: {}",
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION")
     );
+    info!("dns version: {}", dns.version().await);
 
     let test_cases = tests::register().await;
 
     assert!(
         tests::run(
-            TestActors { services_subnet },
+            TestActors {
+                services_subnet,
+                dns,
+            },
             test_cases,
             Arc::new(HashMap::new())
         )
