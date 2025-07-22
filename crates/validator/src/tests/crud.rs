@@ -4,6 +4,7 @@
  */
 
 use crate::dns::DnsExt;
+use crate::scylla_cluster::ScyllaClusterExt;
 use crate::tests::*;
 use std::time::Duration;
 use tracing::info;
@@ -18,7 +19,10 @@ pub(crate) async fn new() -> TestCase {
 
 const VS_NAME: &str = "vs";
 
+const VS_PORT: u16 = 6080;
+
 const VS_OCTET: u8 = 1;
+const DB_OCTET: u8 = 2;
 
 async fn init(actors: TestActors) {
     info!("started");
@@ -26,19 +30,25 @@ async fn init(actors: TestActors) {
     let vs_ip = actors.services_subnet.ip(VS_OCTET);
 
     actors.dns.upsert(VS_NAME.to_string(), Some(vs_ip)).await;
-    info!(
-        "dns entry created for {}.{}: {}",
+
+    let vs_url = format!(
+        "http://{}.{}:{}",
         VS_NAME,
         actors.dns.domain().await,
-        vs_ip
+        VS_PORT
     );
 
+    let db_ip = actors.services_subnet.ip(DB_OCTET);
+
+    actors.db.start(vs_url, db_ip, None).await;
+    assert!(actors.db.wait_for_ready().await);
     info!("finished");
 }
 
 async fn cleanup(actors: TestActors) {
     info!("started");
     actors.dns.upsert(VS_NAME.to_string(), None).await;
+    actors.db.stop().await;
     info!("finished");
 }
 
