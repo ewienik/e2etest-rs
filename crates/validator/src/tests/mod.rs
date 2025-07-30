@@ -6,6 +6,7 @@
 mod crud;
 
 use crate::ServicesSubnet;
+use crate::dns::Dns;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream;
@@ -15,6 +16,7 @@ use std::collections::HashSet;
 use std::future;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time;
 use tracing::Instrument;
 use tracing::Span;
@@ -25,6 +27,7 @@ use tracing::info_span;
 #[derive(Clone)]
 pub(crate) struct TestActors {
     pub(crate) services_subnet: Arc<ServicesSubnet>,
+    pub(crate) dns: mpsc::Sender<Dns>,
 }
 
 type TestFuture = BoxFuture<'static, ()>;
