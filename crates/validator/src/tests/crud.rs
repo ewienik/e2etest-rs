@@ -15,8 +15,11 @@ pub(crate) async fn new() -> TestCase {
         .with_test("dummy", timeout, dummy)
 }
 
-async fn init(_actors: TestActors) {
+const VS_OCTET: u8 = 1;
+
+async fn init(actors: TestActors) {
     info!("started");
+    let _vs_ip = actors.services_subnet.ip(VS_OCTET);
     info!("finished");
 }
 

@@ -7,6 +7,7 @@ mod tests;
 
 use clap::Parser;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tests::TestActors;
 use tracing::info;
@@ -16,7 +17,35 @@ use tracing_subscriber::prelude::*;
 
 #[derive(Debug, Parser)]
 #[clap(version)]
-struct Args {}
+struct Args {
+    #[arg(short, long, default_value = "127.0.2.1")]
+    base_ip: Ipv4Addr,
+}
+
+/// Represents a subnet for services, derived from a base IP address.
+struct ServicesSubnet([u8; 3]);
+
+impl ServicesSubnet {
+    fn new(ip: Ipv4Addr) -> Self {
+        assert!(
+            ip.is_loopback(),
+            "Base IP for services must be a loopback address"
+        );
+
+        let octets = ip.octets();
+        assert!(
+            octets[3] == 1,
+            "Base IP for services must have the last octet set to 1"
+        );
+
+        Self([octets[0], octets[1], octets[2]])
+    }
+
+    /// Returns an IP address in the subnet with the specified last octet.
+    fn ip(&self, octet: u8) -> Ipv4Addr {
+        [self.0[0], self.0[1], self.0[2], octet].into()
+    }
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -29,7 +58,9 @@ async fn main() {
         .with(fmt::layer().with_target(false))
         .init();
 
-    let _args = Args::parse();
+    let args = Args::parse();
+
+    let services_subnet = Arc::new(ServicesSubnet::new(args.base_ip));
 
     info!(
         "{} version: {}",
@@ -39,5 +70,12 @@ async fn main() {
 
     let test_cases = tests::register().await;
 
-    assert!(tests::run(TestActors {}, test_cases, Arc::new(HashMap::new())).await);
+    assert!(
+        tests::run(
+            TestActors { services_subnet },
+            test_cases,
+            Arc::new(HashMap::new())
+        )
+        .await
+    );
 }

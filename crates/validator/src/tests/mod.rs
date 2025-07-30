@@ -5,6 +5,7 @@
 
 mod crud;
 
+use crate::ServicesSubnet;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream;
@@ -22,7 +23,9 @@ use tracing::info;
 use tracing::info_span;
 
 #[derive(Clone)]
-pub(crate) struct TestActors {}
+pub(crate) struct TestActors {
+    pub(crate) services_subnet: Arc<ServicesSubnet>,
+}
 
 type TestFuture = BoxFuture<'static, ()>;
 
