@@ -50,3 +50,4 @@ utoipa-axum = "0.2.0"
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
 uuid = "1.16.0"
 vector-store = { path = "crates/vector-store" }
+secrecy = "0.10.3"
