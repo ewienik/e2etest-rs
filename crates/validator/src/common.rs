@@ -26,7 +26,7 @@ pub(crate) async fn init(actors: TestActors) {
 
     let vs_ip = actors.services_subnet.ip(VS_OCTET);
 
-    actors.dns.upsert(VS_NAME.to_string(), Some(vs_ip)).await;
+    actors.dns.upsert(VS_NAME.to_string(), vs_ip).await;
 
     let vs_url = format!(
         "http://{}.{}:{}",
@@ -51,7 +51,7 @@ pub(crate) async fn init(actors: TestActors) {
 
 pub(crate) async fn cleanup(actors: TestActors) {
     info!("started");
-    actors.dns.upsert(VS_NAME.to_string(), None).await;
+    actors.dns.remove(VS_NAME.to_string()).await;
     actors.vs.stop().await;
     actors.db.stop().await;
     info!("finished");

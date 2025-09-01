@@ -8,6 +8,7 @@ use hickory_server::authority::ZoneType;
 use hickory_server::proto::rr::DNSClass;
 use hickory_server::proto::rr::LowerName;
 use hickory_server::proto::rr::Name;
+use hickory_server::proto::rr::RrKey;
 use hickory_server::proto::rr::rdata::a::A;
 use hickory_server::proto::rr::rdata::soa::SOA;
 use hickory_server::proto::rr::record_data::RData;
@@ -28,7 +29,8 @@ use tracing::debug_span;
 pub(crate) enum Dns {
     Version { tx: oneshot::Sender<String> },
     Domain { tx: oneshot::Sender<String> },
-    Upsert { name: String, ip: Option<Ipv4Addr> },
+    Remove { name: String },
+    Upsert { name: String, ip: Ipv4Addr },
 }
 
 pub(crate) trait DnsExt {
@@ -38,8 +40,11 @@ pub(crate) trait DnsExt {
     /// Returns the domain name of the DNS server.
     async fn domain(&self) -> String;
 
+    /// Remove an A DNS record with the given name.
+    async fn remove(&self, name: String);
+
     /// Upserts an A DNS record with the given name and IP address.
-    async fn upsert(&self, name: String, ip: Option<Ipv4Addr>);
+    async fn upsert(&self, name: String, ip: Ipv4Addr);
 }
 
 impl DnsExt for mpsc::Sender<Dns> {
@@ -61,7 +66,13 @@ impl DnsExt for mpsc::Sender<Dns> {
             .expect("DnsExt::domain: internal actor should send response")
     }
 
-    async fn upsert(&self, name: String, ip: Option<Ipv4Addr>) {
+    async fn remove(&self, name: String) {
+        self.send(Dns::Remove { name })
+            .await
+            .expect("DnsExt::remove: internal actor should receive request");
+    }
+
+    async fn upsert(&self, name: String, ip: Ipv4Addr) {
         self.send(Dns::Upsert { name, ip })
             .await
             .expect("DnsExt::upsert: internal actor should receive request");
@@ -163,27 +174,35 @@ async fn process(msg: Dns, state: &mut State) {
                 .expect("process Dns::Domain: failed to send a response");
         }
 
+        Dns::Remove { name } => {
+            remove(name, state).await;
+        }
+
         Dns::Upsert { name, ip } => {
             upsert(name, ip, state).await;
         }
     }
 }
 
-async fn upsert(name: String, ip: Option<Ipv4Addr>, state: &mut State) {
-    let serial = state.serial;
-    state.serial += 1;
+async fn remove(name: String, state: &mut State) {
+    state.authority.records_mut().await.remove(&RrKey::new(
+        LowerName::from_str(&format!("{name}.{ZONE}")).expect("remove: failed to parse name"),
+        RecordType::A,
+    ));
+}
+
+async fn upsert(name: String, ip: Ipv4Addr, state: &mut State) {
     let name = Name::from_str(&format!("{name}.{ZONE}")).expect("upsert: failed to parse name");
 
-    let mut record = if let Some(ip) = ip {
-        let octets = ip.octets();
-        Record::from_rdata(
-            name,
-            TTL,
-            RData::A(A::new(octets[0], octets[1], octets[2], octets[3])),
-        )
-    } else {
-        Record::update0(name, TTL, RecordType::A)
-    };
+    let serial = state.serial;
+    state.serial += 1;
+
+    let octets = ip.octets();
+    let mut record = Record::from_rdata(
+        name,
+        TTL,
+        RData::A(A::new(octets[0], octets[1], octets[2], octets[3])),
+    );
     record.set_dns_class(DNSClass::IN);
 
     state.authority.upsert(record, serial).await;
