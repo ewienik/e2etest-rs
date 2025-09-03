@@ -5,6 +5,7 @@
 
 mod crud;
 mod full_scan;
+mod serde;
 
 use crate::ServicesSubnet;
 use crate::dns::Dns;
@@ -195,6 +196,7 @@ pub(crate) async fn register() -> Vec<(String, TestCase)> {
     vec![
         ("crud", crud::new().await),
         ("full_scan", full_scan::new().await),
+        ("serde", serde::new().await),
     ]
     .into_iter()
     .map(|(name, test_case)| (name.to_string(), test_case))
