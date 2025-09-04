@@ -12,7 +12,6 @@ use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task;
 use tokio::time;
 use tracing::info;
 
@@ -79,7 +78,7 @@ where
 {
     time::timeout(timeout, async {
         while !condition().await {
-            task::yield_now().await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await
