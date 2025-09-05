@@ -19,7 +19,7 @@ pub(crate) async fn new() -> TestCase {
 }
 
 async fn test_serialization_deserialization_all_types(actors: TestActors) {
-    let (session, _client) = crate::common::prepare_connection(actors).await;
+    let (session, _client) = crate::common::prepare_connection(&actors).await;
 
     let cases = vec![
         ("ascii", "'random_text'"),

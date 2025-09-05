@@ -4,8 +4,10 @@
  */
 
 use crate::common::*;
+use crate::scylla_cluster::ScyllaClusterExt;
 use crate::tests::*;
 use std::time::Duration;
+use tokio::time::sleep;
 use tracing::info;
 
 pub(crate) async fn new() -> TestCase {
@@ -14,13 +16,13 @@ pub(crate) async fn new() -> TestCase {
         .with_init(timeout, init)
         .with_cleanup(timeout, cleanup)
         .with_test(
-            "full_scan_is_completed_when_responding_to_messages_concurrently",
+            "reconnect_doesnt_break_fullscan",
             timeout,
-            full_scan_is_completed_when_responding_to_messages_concurrently,
+            reconnect_doesnt_break_fullscan,
         )
 }
 
-async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors: TestActors) {
+async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
     info!("started");
 
     let (session, client) = prepare_connection(&actors).await;
@@ -46,15 +48,16 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
         .await
         .expect("failed to create a table");
 
-    let embedding: Vec<f32> = vec![0.0, 0.0, 0.0];
-    for i in 0..1000 {
+    let stmt = session
+        .prepare("INSERT INTO tbl (id, embedding) VALUES (?, [1.0, 2.0, 3.0])")
+        .await
+        .expect("failed to prepare a statement");
+
+    for id in 0..1000 {
         session
-            .query_unpaged(
-                "INSERT INTO tbl (id, embedding) VALUES (?, ?)",
-                (i, embedding.clone()),
-            )
+            .execute_unpaged(&stmt, (id,))
             .await
-            .expect("failed to insert data");
+            .expect("failed to insert a row");
     }
 
     session
@@ -74,7 +77,7 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
 
     let result = session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1",
             (),
         )
         .await;
@@ -84,27 +87,29 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
         _ => panic!("Expected SERVICE_UNAVAILABLE error, got: {result:?}"),
     }
 
+    actors.db.down().await;
+
+    sleep(Duration::from_secs(1)).await;
+    let count = client.count(&index.keyspace, &index.index).await;
+    assert!(count.is_some() && count.unwrap() < 1000);
+    actors.db.up(get_default_vs_url(&actors).await, None).await;
+
+    assert!(actors.db.wait_for_ready().await);
+
     wait_for(
-        || async { client.count(&index.keyspace, &index.index).await == Some(1000) },
-        "Waiting for 1000 vectors to be indexed",
-        Duration::from_secs(5),
+        || async {
+            session
+                .query_unpaged(
+                    "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1",
+                    (),
+                )
+                .await
+                .is_ok()
+        },
+        "Waiting for index build",
+        Duration::from_secs(10),
     )
     .await;
-
-    session
-        .query_unpaged(
-            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5",
-            (),
-        )
-        .await
-        .expect("failed to query ANN search");
-
-    session
-        .query_unpaged("DROP INDEX idx", ())
-        .await
-        .expect("failed to drop an index");
-
-    while !client.indexes().await.is_empty() {}
 
     session
         .query_unpaged("DROP KEYSPACE ks", ())

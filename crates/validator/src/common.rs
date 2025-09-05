@@ -10,6 +10,7 @@ use crate::vector_store_cluster::VectorStoreClusterExt;
 use httpclient::HttpClient;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
@@ -23,6 +24,19 @@ pub(crate) const DB_PORT: u16 = 9042;
 pub(crate) const VS_OCTET: u8 = 1;
 pub(crate) const DB_OCTET: u8 = 2;
 
+pub(crate) async fn get_default_vs_url(actors: &TestActors) -> String {
+    format!(
+        "http://{}.{}:{}",
+        VS_NAME,
+        actors.dns.domain().await,
+        VS_PORT
+    )
+}
+
+pub(crate) fn get_default_db_ip(actors: &TestActors) -> Ipv4Addr {
+    actors.services_subnet.ip(DB_OCTET)
+}
+
 pub(crate) async fn init(actors: TestActors) {
     info!("started");
 
@@ -30,14 +44,9 @@ pub(crate) async fn init(actors: TestActors) {
 
     actors.dns.upsert(VS_NAME.to_string(), vs_ip).await;
 
-    let vs_url = format!(
-        "http://{}.{}:{}",
-        VS_NAME,
-        actors.dns.domain().await,
-        VS_PORT
-    );
+    let vs_url = get_default_vs_url(&actors).await;
 
-    let db_ip = actors.services_subnet.ip(DB_OCTET);
+    let db_ip = get_default_db_ip(&actors);
 
     actors.db.start(vs_url, db_ip, None).await;
     assert!(actors.db.wait_for_ready().await);
@@ -59,7 +68,7 @@ pub(crate) async fn cleanup(actors: TestActors) {
     info!("finished");
 }
 
-pub(crate) async fn prepare_connection(actors: TestActors) -> (Arc<Session>, HttpClient) {
+pub(crate) async fn prepare_connection(actors: &TestActors) -> (Arc<Session>, HttpClient) {
     let session = Arc::new(
         SessionBuilder::new()
             .known_node(actors.services_subnet.ip(DB_OCTET).to_string())
