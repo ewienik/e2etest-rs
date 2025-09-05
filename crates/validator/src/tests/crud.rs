@@ -28,7 +28,7 @@ pub(crate) async fn new() -> TestCase {
 async fn simple_create_drop_index(actors: TestActors) {
     info!("started");
 
-    let (session, client) = prepare_connection(actors).await;
+    let (session, client) = prepare_connection(&actors).await;
 
     session.query_unpaged(
         "CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
@@ -83,7 +83,7 @@ async fn simple_create_drop_index(actors: TestActors) {
 async fn simple_create_drop_multiple_indexes(actors: TestActors) {
     info!("started");
 
-    let (session, client) = prepare_connection(actors).await;
+    let (session, client) = prepare_connection(&actors).await;
 
     // Create keyspace
     // Different keyspace name have to be used until the issue VECTOR-213 is fixed.
