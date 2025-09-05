@@ -29,20 +29,28 @@ use vector_store_cluster::VectorStoreClusterExt;
 #[derive(Debug, Parser)]
 #[clap(version)]
 struct Args {
-    #[arg(short, long, default_value = "127.0.1.1")]
+    /// IP address for the DNS server to bind to. Must be a loopback address.
+    #[arg(short, long, default_value = "127.0.1.1", value_name = "IP")]
     dns_ip: Ipv4Addr,
 
-    #[arg(short, long, default_value = "127.0.2.1")]
+    /// IP address for the base services to bind to. Must be a loopback address.
+    #[arg(short, long, default_value = "127.0.2.1", value_name = "IP")]
     base_ip: Ipv4Addr,
 
-    #[arg(short, long, default_value = "conf/scylla.yaml")]
+    /// Path to the ScyllaDB configuration file.
+    #[arg(short, long, default_value = "conf/scylla.yaml", value_name = "PATH")]
     scylla_default_conf: PathBuf,
 
+    /// Enable verbose logging for Scylla and vector-store.
     #[arg(short, long, default_value = "false")]
     verbose: bool,
 
+    /// Path to the ScyllaDB executable.
+    #[arg(value_name = "PATH")]
     scylla: PathBuf,
 
+    /// Path to the Vector Store executable.
+    #[arg(value_name = "PATH")]
     vector_store: PathBuf,
 }
 
