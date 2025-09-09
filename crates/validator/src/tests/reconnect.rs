@@ -27,29 +27,18 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
 
     let (session, client) = prepare_connection(&actors).await;
 
-    session.query_unpaged(
-        "CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-        (),
-    ).await.expect("failed to create a keyspace");
-
-    session
-        .use_keyspace("ks", false)
-        .await
-        .expect("failed to use a keyspace");
-
-    session
-        .query_unpaged(
-            "
-            CREATE TABLE tbl (id INT PRIMARY KEY, embedding VECTOR<FLOAT, 3>)
-            WITH cdc = {'enabled': true }
-            ",
-            (),
-        )
-        .await
-        .expect("failed to create a table");
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(
+        &session,
+        "id INT PRIMARY KEY, embedding VECTOR<FLOAT, 3>",
+        Some("CDC = {'enabled': true}"),
+    )
+    .await;
 
     let stmt = session
-        .prepare("INSERT INTO tbl (id, embedding) VALUES (?, [1.0, 2.0, 3.0])")
+        .prepare(format!(
+            "INSERT INTO {table} (id, embedding) VALUES (?, [1.0, 2.0, 3.0])"
+        ))
         .await
         .expect("failed to prepare a statement");
 
@@ -60,24 +49,11 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
             .expect("failed to insert a row");
     }
 
-    session
-        .query_unpaged(
-            "CREATE INDEX idx ON tbl(embedding) USING 'vector_index'",
-            (),
-        )
-        .await
-        .expect("failed to create an index");
-
-    while client.indexes().await.is_empty() {}
-    let indexes = client.indexes().await;
-    assert_eq!(indexes.len(), 1);
-    let index = &indexes[0];
-    assert_eq!(index.keyspace.as_ref(), "ks");
-    assert_eq!(index.index.as_ref(), "idx");
+    let index = create_index(&session, &client, &table, "embedding").await;
 
     let result = session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1",
+            format!("SELECT * FROM {table} ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
             (),
         )
         .await;
@@ -100,7 +76,9 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
         || async {
             session
                 .query_unpaged(
-                    "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1",
+                    format!(
+                        "SELECT * FROM {table} ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 1"
+                    ),
                     (),
                 )
                 .await
@@ -112,7 +90,7 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
     .await;
 
     session
-        .query_unpaged("DROP KEYSPACE ks", ())
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
         .expect("failed to drop a keyspace");
 

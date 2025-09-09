@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use crate::{common::wait_for, tests::*};
+use crate::common::*;
+use crate::tests::*;
 use scylla::value::CqlValue;
 
 pub(crate) async fn new() -> TestCase {
@@ -38,15 +39,7 @@ async fn test_serialization_deserialization_all_types(actors: TestActors) {
         ("text", "'some_text'"),
     ];
 
-    session.query_unpaged(
-        "CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-        (),
-    ).await.expect("failed to create a keyspace");
-
-    session
-        .use_keyspace("ks", false)
-        .await
-        .expect("failed to use a keyspace");
+    let keyspace = create_keyspace(&session).await;
 
     for (typ, data) in &cases {
         session
@@ -104,7 +97,7 @@ async fn test_serialization_deserialization_all_types(actors: TestActors) {
     }
 
     session
-        .query_unpaged("DROP KEYSPACE ks", ())
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
         .expect("failed to drop a keyspace");
 }
