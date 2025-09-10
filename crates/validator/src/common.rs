@@ -10,11 +10,14 @@ use crate::vector_store_cluster::VectorStoreClusterExt;
 use httpclient::HttpClient;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
+use scylla::value::Row;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
 use tracing::info;
+use uuid::Uuid;
+use vector_store::IndexInfo;
 
 const VS_NAME: &str = "vs";
 
@@ -92,4 +95,96 @@ where
     })
     .await
     .unwrap_or_else(|_| panic!("Timeout on: {msg}"))
+}
+
+pub(crate) async fn get_query_results(query: String, session: &Session) -> Vec<Row> {
+    session
+        .query_unpaged(query, ())
+        .await
+        .expect("failed to run query")
+        .into_rows_result()
+        .expect("failed to get rows")
+        .rows()
+        .unwrap()
+        .collect::<Result<Vec<Row>, _>>()
+        .expect("failed to decode rows")
+}
+
+pub(crate) async fn create_keyspace(session: &Session) -> String {
+    let keyspace = format!("ks_{}", Uuid::new_v4().simple());
+
+    // Create keyspace
+    session.query_unpaged(
+        format!("CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}"),
+        (),
+    ).await.expect("failed to create a keyspace");
+
+    // Use keyspace
+    session
+        .use_keyspace(&keyspace, false)
+        .await
+        .expect("failed to use a keyspace");
+
+    keyspace
+}
+
+pub(crate) async fn create_table(
+    session: &Session,
+    columns: &str,
+    options: Option<&str>,
+) -> String {
+    let table = format!("tbl_{}", Uuid::new_v4().simple());
+
+    let extra = if let Some(options) = options {
+        format!("WITH {options}")
+    } else {
+        String::new()
+    };
+
+    // Create table
+    session
+        .query_unpaged(format!("CREATE TABLE {table} ({columns}) {extra}"), ())
+        .await
+        .expect("failed to create a table");
+
+    table
+}
+
+pub(crate) async fn create_index(
+    session: &Session,
+    client: &HttpClient,
+    table: &str,
+    column: &str,
+) -> IndexInfo {
+    let index = format!("idx_{}", Uuid::new_v4().simple());
+
+    // Create index
+    session
+        .query_unpaged(
+            format!("CREATE INDEX {index} ON {table}({column}) USING 'vector_index'"),
+            (),
+        )
+        .await
+        .expect("failed to create an index");
+
+    // Wait for the index to be created
+    wait_for(
+        || async {
+            client
+                .indexes()
+                .await
+                .iter()
+                .any(|idx| idx.index.to_string() == index)
+        },
+        "Waiting for the first index to be created",
+        Duration::from_secs(5),
+    )
+    .await;
+
+    client
+        .indexes()
+        .await
+        .into_iter()
+        .find(|idx| idx.index.to_string() == index)
+        .expect("index not found")
 }

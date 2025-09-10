@@ -30,50 +30,27 @@ async fn simple_create_drop_index(actors: TestActors) {
 
     let (session, client) = prepare_connection(&actors).await;
 
-    session.query_unpaged(
-        "CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-        (),
-    ).await.expect("failed to create a keyspace");
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(
+        &session,
+        "id BIGINT PRIMARY KEY, embedding VECTOR<FLOAT, 3>",
+        Some("CDC = {'enabled': true}"),
+    )
+    .await;
+
+    let index = create_index(&session, &client, &table, "embedding").await;
+
+    assert_eq!(index.keyspace.as_ref(), &keyspace);
 
     session
-        .use_keyspace("ks", false)
-        .await
-        .expect("failed to use a keyspace");
-
-    session
-        .query_unpaged(
-            "
-            CREATE TABLE tbl (id BIGINT PRIMARY KEY, embedding VECTOR<FLOAT, 3>)
-            WITH cdc = {'enabled': true }
-            ",
-            (),
-        )
-        .await
-        .expect("failed to create a table");
-
-    session
-        .query_unpaged(
-            "CREATE INDEX idx ON tbl(embedding) USING 'vector_index'",
-            (),
-        )
-        .await
-        .expect("failed to create an index");
-
-    while client.indexes().await.is_empty() {}
-    let indexes = client.indexes().await;
-    assert_eq!(indexes.len(), 1);
-    assert_eq!(indexes[0].keyspace.as_ref(), "ks");
-    assert_eq!(indexes[0].index.as_ref(), "idx");
-
-    session
-        .query_unpaged("DROP INDEX idx", ())
+        .query_unpaged(format!("DROP INDEX {}", index.index), ())
         .await
         .expect("failed to drop an index");
 
     while !client.indexes().await.is_empty() {}
 
     session
-        .query_unpaged("DROP KEYSPACE ks", ())
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
         .expect("failed to drop a keyspace");
 
@@ -85,51 +62,23 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
 
     let (session, client) = prepare_connection(&actors).await;
 
-    // Create keyspace
-    // Different keyspace name have to be used until the issue VECTOR-213 is fixed.
-    // When fixed please remove the comment and change the keyspace back to "ks"
-    session.query_unpaged(
-        "CREATE KEYSPACE ks2 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-        (),
-    ).await.expect("failed to create a keyspace");
-
-    // Use keyspace
-    session
-        .use_keyspace("ks2", false)
-        .await
-        .expect("failed to use a keyspace");
-
-    // Create table
-    session
-        .query_unpaged(
-            "
-            CREATE TABLE tbl (pk INT PRIMARY KEY, v1 VECTOR<FLOAT, 3>, v2 VECTOR<FLOAT, 3>)
-            ",
-            (),
-        )
-        .await
-        .expect("failed to create a table");
-
-    // Create index on column v1
-    session
-        .query_unpaged("CREATE INDEX idx1 ON tbl(v1) USING 'vector_index'", ())
-        .await
-        .expect("failed to create an index");
-
-    // Wait for the index to be created
-    wait_for(
-        || async { client.indexes().await.len() == 1 },
-        "Waiting for the first index to be created",
-        Duration::from_secs(5),
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(
+        &session,
+        "pk INT PRIMARY KEY, v1 VECTOR<FLOAT, 3>, v2 VECTOR<FLOAT, 3>",
+        None,
     )
     .await;
+
+    // Create index on column v1
+    let index1 = create_index(&session, &client, &table, "v1").await;
 
     // Wait for the full scan to complete and check if ANN query succeeds on v1
     wait_for(
         || async {
             session
                 .query_unpaged(
-                    "SELECT * FROM tbl ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+                    format!("SELECT * FROM {table} ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
                     (),
                 )
                 .await
@@ -143,32 +92,19 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
     // ANN query on v2 should not succeed without the index
     session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await
         .expect_err("ANN query should fail when index does not exist");
 
     // Create index on column v2
-    session
-        .query_unpaged("CREATE INDEX idx2 ON tbl(v2) USING 'vector_index'", ())
-        .await
-        .expect("failed to create an index");
-
-    info!("waiting for the second index to be created");
-
-    // Wait for the second index to be created
-    wait_for(
-        || async { client.indexes().await.len() == 2 },
-        "Waiting for 2 indexes to be created",
-        Duration::from_secs(5),
-    )
-    .await;
+    let index2 = create_index(&session, &client, &table, "v2").await;
 
     // Check if ANN query on v1 still succeeds
     session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await
@@ -179,7 +115,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
         || async {
             session
                 .query_unpaged(
-                    "SELECT * FROM tbl ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+                    format!("SELECT * FROM {table} ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
                     (),
                 )
                 .await
@@ -192,7 +128,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
 
     // Drop index on column v1
     session
-        .query_unpaged("DROP INDEX idx1", ())
+        .query_unpaged(format!("DROP INDEX {}", index1.index), ())
         .await
         .expect("failed to drop an index");
 
@@ -209,7 +145,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
     // ANN query on v1 should not succeed after dropping the index
     session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY v1 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await
@@ -218,7 +154,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
     // Check if ANN query on v2 still succeeds
     session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY v2 ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await
@@ -226,7 +162,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
 
     // Drop index on column v2
     session
-        .query_unpaged("DROP INDEX idx2", ())
+        .query_unpaged(format!("DROP INDEX {}", index2.index), ())
         .await
         .expect("failed to drop an index");
 
@@ -240,7 +176,7 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
 
     // Drop keyspace
     session
-        .query_unpaged("DROP KEYSPACE ks2", ())
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
         .expect("failed to drop a keyspace");
 

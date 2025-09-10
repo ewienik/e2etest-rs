@@ -25,56 +25,30 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
 
     let (session, client) = prepare_connection(&actors).await;
 
-    session.query_unpaged(
-        "CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-        (),
-    ).await.expect("failed to create a keyspace");
-
-    session
-        .use_keyspace("ks", false)
-        .await
-        .expect("failed to use a keyspace");
-
-    session
-        .query_unpaged(
-            "
-            CREATE TABLE tbl (id INT PRIMARY KEY, embedding VECTOR<FLOAT, 3>)
-            WITH cdc = {'enabled': true }
-            ",
-            (),
-        )
-        .await
-        .expect("failed to create a table");
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(
+        &session,
+        "id INT PRIMARY KEY, embedding VECTOR<FLOAT, 3>",
+        Some("CDC = {'enabled': true}"),
+    )
+    .await;
 
     let embedding: Vec<f32> = vec![0.0, 0.0, 0.0];
     for i in 0..1000 {
         session
             .query_unpaged(
-                "INSERT INTO tbl (id, embedding) VALUES (?, ?)",
+                format!("INSERT INTO {table} (id, embedding) VALUES (?, ?)"),
                 (i, embedding.clone()),
             )
             .await
             .expect("failed to insert data");
     }
 
-    session
-        .query_unpaged(
-            "CREATE INDEX idx ON tbl(embedding) USING 'vector_index'",
-            (),
-        )
-        .await
-        .expect("failed to create an index");
-
-    while client.indexes().await.is_empty() {}
-    let indexes = client.indexes().await;
-    assert_eq!(indexes.len(), 1);
-    let index = &indexes[0];
-    assert_eq!(index.keyspace.as_ref(), "ks");
-    assert_eq!(index.index.as_ref(), "idx");
+    let index = create_index(&session, &client, &table, "embedding").await;
 
     let result = session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await;
@@ -93,21 +67,21 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
 
     session
         .query_unpaged(
-            "SELECT * FROM tbl ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5",
+            format!("SELECT * FROM {table} ORDER BY embedding ANN OF [1.0, 2.0, 3.0] LIMIT 5"),
             (),
         )
         .await
         .expect("failed to query ANN search");
 
     session
-        .query_unpaged("DROP INDEX idx", ())
+        .query_unpaged(format!("DROP INDEX {}", index.index), ())
         .await
         .expect("failed to drop an index");
 
     while !client.indexes().await.is_empty() {}
 
     session
-        .query_unpaged("DROP KEYSPACE ks", ())
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
         .expect("failed to drop a keyspace");
 

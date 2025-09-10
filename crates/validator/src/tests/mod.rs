@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+mod ann;
 mod crud;
 mod full_scan;
 mod reconnect;
@@ -215,10 +216,11 @@ async fn run_single(span: Span, timeout: Duration, future: TestFuture) -> bool {
 /// Returns a vector of all known test cases to be run. Each test case is registered with a name
 pub(crate) async fn register() -> Vec<(String, TestCase)> {
     vec![
+        ("ann", ann::new().await),
         ("crud", crud::new().await),
         ("full_scan", full_scan::new().await),
-        ("serde", serde::new().await),
         ("reconnect", reconnect::new().await),
+        ("serde", serde::new().await),
     ]
     .into_iter()
     .map(|(name, test_case)| (name.to_string(), test_case))
