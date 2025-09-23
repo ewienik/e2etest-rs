@@ -244,7 +244,7 @@ async fn run_cluster(
             .arg(db_ip.to_string())
             .arg("--seed-provider-parameters")
             .arg(format!("seeds={db_ip}"))
-            .arg("--vector-store-uri")
+            .arg("--vector-store-primary-uri")
             .arg(vs_uri)
             .arg("--developer-mode")
             .arg("true")
