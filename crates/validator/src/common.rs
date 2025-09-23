@@ -10,7 +10,7 @@ use crate::vector_store_cluster::VectorStoreClusterExt;
 use httpclient::HttpClient;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
-use scylla::value::Row;
+use scylla::response::query_result::QueryRowsResult;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,17 +97,13 @@ where
     .unwrap_or_else(|_| panic!("Timeout on: {msg}"))
 }
 
-pub(crate) async fn get_query_results(query: String, session: &Session) -> Vec<Row> {
+pub(crate) async fn get_query_results(query: String, session: &Session) -> QueryRowsResult {
     session
         .query_unpaged(query, ())
         .await
         .expect("failed to run query")
         .into_rows_result()
         .expect("failed to get rows")
-        .rows()
-        .unwrap()
-        .collect::<Result<Vec<Row>, _>>()
-        .expect("failed to decode rows")
 }
 
 pub(crate) async fn create_keyspace(session: &Session) -> String {
