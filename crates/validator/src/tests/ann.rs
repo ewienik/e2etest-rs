@@ -65,16 +65,16 @@ async fn ann_query_returns_expected_results(actors: TestActors) {
     .await;
 
     // Check if the query returns the expected results (recall at least 85%)
-    let rows = get_query_results(
+    let results = get_query_results(
         format!("SELECT pk FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 100"),
         &session,
     )
     .await;
-    assert_eq!(rows.len(), 100);
+    let rows = results.rows::<(i32,)>().expect("failed to get rows");
+    assert_eq!(rows.rows_remaining(), 100);
     let correct = rows
-        .iter()
         .filter(|row| {
-            let pk: i32 = row.columns[0].as_ref().unwrap().as_int().unwrap();
+            let pk = row.expect("failed to get row").0;
             pk < 100
         })
         .count();
@@ -124,19 +124,25 @@ async fn ann_query_respects_limit(actors: TestActors) {
     .await;
 
     // Check if queries return the expected number of results
-    let rows = get_query_results(
+    let results = get_query_results(
         format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 10"),
         &session,
     )
     .await;
-    assert!(rows.len() <= 10);
+    let rows = results
+        .rows::<(i32, Vec<f32>)>()
+        .expect("failed to get rows");
+    assert!(rows.rows_remaining() <= 10);
 
-    let rows = get_query_results(
+    let results = get_query_results(
         format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 1000"),
         &session,
     )
     .await;
-    assert!(rows.len() <= 10); // Should return only 10, as there are only 10 vectors
+    let rows = results
+        .rows::<(i32, Vec<f32>)>()
+        .expect("failed to get rows");
+    assert!(rows.rows_remaining() <= 10); // Should return only 10, as there are only 10 vectors
 
     // Check if LIMIT over 1000 fails
     session
@@ -186,19 +192,25 @@ async fn ann_query_respects_limit_over_1000_vectors(actors: TestActors) {
     .await;
 
     // Check if queries return the expected number of results
-    let rows = get_query_results(
+    let results = get_query_results(
         format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 10"),
         &session,
     )
     .await;
-    assert!(rows.len() <= 10);
+    let rows = results
+        .rows::<(i32, Vec<f32>)>()
+        .expect("failed to get rows");
+    assert!(rows.rows_remaining() <= 10);
 
-    let rows = get_query_results(
+    let results = get_query_results(
         format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 1000"),
         &session,
     )
     .await;
-    assert!(rows.len() <= 1000);
+    let rows = results
+        .rows::<(i32, Vec<f32>)>()
+        .expect("failed to get rows");
+    assert!(rows.rows_remaining() <= 1000);
 
     // Check if LIMIT over 1000 fails
     session
