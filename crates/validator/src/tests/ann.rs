@@ -5,8 +5,8 @@
 
 use crate::common::*;
 use crate::tests::*;
+use std::collections::HashMap;
 use std::time::Duration;
-use tracing::debug;
 use tracing::info;
 
 pub(crate) async fn new() -> TestCase {
@@ -39,17 +39,23 @@ async fn ann_query_returns_expected_results(actors: TestActors) {
     let keyspace = create_keyspace(&session).await;
     let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
 
-    // Insert 1000 vectors
+    // Create a map of pk -> embedding
+    let mut embeddings: HashMap<i32, Vec<f32>> = HashMap::new();
     for i in 0..1000 {
-        let embedding: Vec<f32> = vec![
+        let embedding = vec![
             if i < 100 { 0.0 } else { (i % 3) as f32 },
             if i < 100 { 0.0 } else { (i % 5) as f32 },
             if i < 100 { 0.0 } else { (i % 7) as f32 },
         ];
+        embeddings.insert(i, embedding);
+    }
+
+    // Insert 1000 vectors from the map
+    for (pk, embedding) in &embeddings {
         session
             .query_unpaged(
                 format!("INSERT INTO {table} (pk, v) VALUES (?, ?)"),
-                (i, embedding),
+                (pk, embedding),
             )
             .await
             .expect("failed to insert data");
@@ -66,23 +72,24 @@ async fn ann_query_returns_expected_results(actors: TestActors) {
 
     // Check if the query returns the expected results (recall at least 85%)
     let results = get_query_results(
-        format!("SELECT pk FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 100"),
+        format!("SELECT pk, v FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 100"),
         &session,
     )
     .await;
-    let rows = results.rows::<(i32,)>().expect("failed to get rows");
-    assert_eq!(rows.rows_remaining(), 100);
-    let correct = rows
-        .filter(|row| {
-            let pk = row.expect("failed to get row").0;
-            pk < 100
-        })
-        .count();
-    debug!("Number of matching results: {}", correct);
-    assert!(
-        correct >= 85,
-        "Expected more than 85 matching results, got {correct}"
-    );
+    let rows = results
+        .rows::<(i32, Vec<f32>)>()
+        .expect("failed to get rows");
+    assert!(rows.rows_remaining() <= 100);
+    for row in rows {
+        let row = row.expect("failed to get row");
+        let (pk, v) = row;
+        assert!(
+            embeddings.contains_key(&pk),
+            "pk {pk} not found in embeddings"
+        );
+        let expected = embeddings.get(&pk).unwrap();
+        assert_eq!(&v, expected, "Returned vector does not match for pk={pk}");
+    }
 
     // Drop keyspace
     session
