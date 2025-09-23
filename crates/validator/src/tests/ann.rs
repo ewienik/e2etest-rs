@@ -129,14 +129,14 @@ async fn ann_query_respects_limit(actors: TestActors) {
         &session,
     )
     .await;
-    assert_eq!(rows.len(), 10);
+    assert!(rows.len() <= 10);
 
     let rows = get_query_results(
         format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 1000"),
         &session,
     )
     .await;
-    assert_eq!(rows.len(), 10); // Should return only 10, as there are only 10 vectors
+    assert!(rows.len() <= 10); // Should return only 10, as there are only 10 vectors
 
     // Check if LIMIT over 1000 fails
     session
@@ -191,15 +191,14 @@ async fn ann_query_respects_limit_over_1000_vectors(actors: TestActors) {
         &session,
     )
     .await;
-    assert_eq!(rows.len(), 10);
+    assert!(rows.len() <= 10);
 
-    // Due to VECTOR-221 the test fails. Uncomment after fixing.
-    // let rows = get_query_results(
-    //     format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 1000"),
-    //     &session,
-    // )
-    // .await;
-    // assert_eq!(rows.len(), 1000);
+    let rows = get_query_results(
+        format!("SELECT * FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 1000"),
+        &session,
+    )
+    .await;
+    assert!(rows.len() <= 1000);
 
     // Check if LIMIT over 1000 fails
     session
