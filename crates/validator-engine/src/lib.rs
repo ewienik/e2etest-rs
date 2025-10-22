@@ -47,6 +47,10 @@ struct Args {
     #[arg(short, long, default_value = "conf/scylla.yaml", value_name = "PATH")]
     scylla_default_conf: PathBuf,
 
+    /// Path to the base tmp directory.
+    #[arg(short, long, default_value = "/tmp", value_name = "PATH")]
+    tmpdir: PathBuf,
+
     /// Enable verbose logging for Scylla and vector-store.
     #[arg(short, long, default_value = "false")]
     verbose: bool,
@@ -212,7 +216,13 @@ pub fn run() -> Result<(), &'static str> {
 
             let services_subnet = Arc::new(ServicesSubnet::new(args.base_ip));
             let dns = dns::new(args.dns_ip).await;
-            let db = scylla_cluster::new(args.scylla, args.scylla_default_conf, args.verbose).await;
+            let db = scylla_cluster::new(
+                args.scylla,
+                args.scylla_default_conf,
+                args.tmpdir,
+                args.verbose,
+            )
+            .await;
             let vs = vector_store_cluster::new(args.vector_store, args.verbose).await;
 
             info!(
