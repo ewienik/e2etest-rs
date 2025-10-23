@@ -120,7 +120,7 @@ pub(crate) async fn new(
     );
     assert!(
         crate::file_exists(&default_conf).await,
-        "scylla config '{path:?}' does not exist"
+        "scylla config '{default_conf:?}' does not exist"
     );
 
     let mut state = State::new(path, default_conf, verbose).await;
