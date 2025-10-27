@@ -8,6 +8,7 @@ mod scylla_cluster;
 mod vector_store_cluster;
 
 use clap::Parser;
+use clap::Subcommand;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -32,47 +33,59 @@ use vector_search_validator_tests::TestActors;
 use vector_search_validator_tests::TestCase;
 use vector_search_validator_tests::VectorStoreClusterExt;
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[clap(version)]
 struct Args {
-    /// IP address for the DNS server to bind to. Must be a loopback address.
-    #[arg(short, long, default_value = "127.0.1.1", value_name = "IP")]
-    dns_ip: Ipv4Addr,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// IP address for the base services to bind to. Must be a loopback address.
-    #[arg(short, long, default_value = "127.0.2.1", value_name = "IP")]
-    base_ip: Ipv4Addr,
+#[derive(Subcommand)]
+enum Command {
+    /// Print the list of available tests and exit.
+    List,
 
-    /// Path to the ScyllaDB configuration file.
-    #[arg(short, long, default_value = "conf/scylla.yaml", value_name = "PATH")]
-    scylla_default_conf: PathBuf,
+    /// Run the vector-search-validator tests.
+    Run {
+        /// IP address for the DNS server to bind to. Must be a loopback address.
+        #[arg(short, long, default_value = "127.0.1.1", value_name = "IP")]
+        dns_ip: Ipv4Addr,
 
-    /// Path to the base tmp directory.
-    #[arg(short, long, default_value = "/tmp", value_name = "PATH")]
-    tmpdir: PathBuf,
+        /// IP address for the base services to bind to. Must be a loopback address.
+        #[arg(short, long, default_value = "127.0.2.1", value_name = "IP")]
+        base_ip: Ipv4Addr,
 
-    /// Enable verbose logging for Scylla and vector-store.
-    #[arg(short, long, default_value = "false")]
-    verbose: bool,
+        /// Path to the ScyllaDB configuration file.
+        #[arg(short, long, default_value = "conf/scylla.yaml", value_name = "PATH")]
+        scylla_default_conf: PathBuf,
 
-    /// Enable duplicating errors information into the stderr stream.
-    #[arg(long, default_value = "false")]
-    duplicate_errors: bool,
+        /// Path to the base tmp directory.
+        #[arg(short, long, default_value = "/tmp", value_name = "PATH")]
+        tmpdir: PathBuf,
 
-    /// Path to the ScyllaDB executable.
-    #[arg(value_name = "PATH")]
-    scylla: PathBuf,
+        /// Enable verbose logging for Scylla and vector-store.
+        #[arg(short, long, default_value = "false")]
+        verbose: bool,
 
-    /// Path to the Vector Store executable.
-    #[arg(value_name = "PATH")]
-    vector_store: PathBuf,
+        /// Enable duplicating errors information into the stderr stream.
+        #[arg(long, default_value = "false")]
+        duplicate_errors: bool,
 
-    /// Filters to select specific tests to run.
-    /// The syntax is as follows:
-    ///     `<partially_matching_test_file_name>::<partially_matching_test_case_name>`
-    /// Without specifying `::`, the filter will try to match both the file and test names.
-    #[arg(value_name = "FILTER")]
-    filters: Vec<String>,
+        /// Path to the ScyllaDB executable.
+        #[arg(value_name = "PATH")]
+        scylla: PathBuf,
+
+        /// Path to the Vector Store executable.
+        #[arg(value_name = "PATH")]
+        vector_store: PathBuf,
+
+        /// Filters to select specific tests to run.
+        /// The syntax is as follows:
+        ///     `<partially_matching_test_file_name>::<partially_matching_test_case_name>`
+        /// Without specifying `::`, the filter will try to match both the file and test names.
+        #[arg(value_name = "FILTER")]
+        filters: Vec<String>,
+    },
 }
 
 async fn file_exists(path: &Path) -> bool {
@@ -183,18 +196,25 @@ pub fn run() -> Result<(), &'static str> {
     let args = Args::parse();
 
     tracing_subscriber::registry()
-        .with(
-            args.duplicate_errors.then_some(
-                fmt::layer()
-                    .with_writer(std::io::stderr)
-                    .with_target(false)
-                    .with_filter(LevelFilter::ERROR)
-                    .with_filter(filter::filter_fn(|metadata| {
-                        metadata.target() == "vector_search_validator_tests"
-                            || metadata.target() == "vector_search_validator_engine"
-                    })),
-            ),
-        )
+        .with({
+            if let Command::Run {
+                duplicate_errors, ..
+            } = &args.command
+            {
+                duplicate_errors.then_some(
+                    fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_target(false)
+                        .with_filter(LevelFilter::ERROR)
+                        .with_filter(filter::filter_fn(|metadata| {
+                            metadata.target() == "vector_search_validator_tests"
+                                || metadata.target() == "vector_search_validator_engine"
+                        })),
+                )
+            } else {
+                None
+            }
+        })
         .with(
             EnvFilter::try_from_default_env()
                 .or_else(|_| EnvFilter::try_new("info"))
@@ -212,18 +232,47 @@ pub fn run() -> Result<(), &'static str> {
         .build()
         .unwrap()
         .block_on(async move {
-            validate_different_subnet(args.dns_ip, args.base_ip);
+            let test_cases = register().await;
+            if let Command::List = &args.command {
+                test_cases
+                    .into_iter()
+                    .flat_map(|(test_case_name, test_case)| {
+                        let tests: Vec<_> = test_case
+                            .tests()
+                            .iter()
+                            .map(move |(test_name, _, _)| test_name.clone())
+                            .collect();
+                        tests
+                            .into_iter()
+                            .map(move |test_name| (test_case_name.clone(), test_name))
+                    })
+                    .for_each(|(test_case_name, test_name)| {
+                        println!("{test_case_name}::{test_name}");
+                    });
+                return Ok(());
+            }
 
-            let services_subnet = Arc::new(ServicesSubnet::new(args.base_ip));
-            let dns = dns::new(args.dns_ip).await;
-            let db = scylla_cluster::new(
-                args.scylla,
-                args.scylla_default_conf,
-                args.tmpdir,
-                args.verbose,
-            )
-            .await;
-            let vs = vector_store_cluster::new(args.vector_store, args.verbose).await;
+            let Command::Run {
+                dns_ip,
+                base_ip,
+                scylla,
+                vector_store,
+                scylla_default_conf,
+                tmpdir,
+                verbose,
+                filters,
+                ..
+            } = args.command
+            else {
+                unreachable!();
+            };
+
+            validate_different_subnet(dns_ip, base_ip);
+
+            let services_subnet = Arc::new(ServicesSubnet::new(base_ip));
+            let dns = dns::new(dns_ip).await;
+            let db = scylla_cluster::new(scylla, scylla_default_conf, tmpdir, verbose).await;
+            let vs = vector_store_cluster::new(vector_store, verbose).await;
 
             info!(
                 "{} version: {}",
@@ -235,8 +284,7 @@ pub fn run() -> Result<(), &'static str> {
             info!("dns version: {}", dns.version().await);
             info!("vector-store version: {}", vs.version().await);
 
-            let test_cases = register().await;
-            let filter_map = parse_test_filters(&args.filters, &test_cases);
+            let filter_map = parse_test_filters(&filters, &test_cases);
 
             vector_search_validator_tests::run(
                 TestActors {
