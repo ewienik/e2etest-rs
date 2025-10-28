@@ -67,6 +67,10 @@ enum Command {
         #[arg(short, long, default_value = "false")]
         verbose: bool,
 
+        /// Disable ansi colors in the log output.
+        #[arg(long, default_value = "false")]
+        disable_colors: bool,
+
         /// Enable duplicating errors information into the stderr stream.
         #[arg(long, default_value = "false")]
         duplicate_errors: bool,
@@ -195,6 +199,11 @@ async fn register() -> Vec<(String, TestCase)> {
 pub fn run() -> Result<(), &'static str> {
     let args = Args::parse();
 
+    let ansi = if let Command::Run { disable_colors, .. } = &args.command {
+        !disable_colors
+    } else {
+        true
+    };
     tracing_subscriber::registry()
         .with({
             if let Command::Run {
@@ -205,6 +214,7 @@ pub fn run() -> Result<(), &'static str> {
                     fmt::layer()
                         .with_writer(std::io::stderr)
                         .with_target(false)
+                        .with_ansi(ansi)
                         .with_filter(LevelFilter::ERROR)
                         .with_filter(filter::filter_fn(|metadata| {
                             metadata.target() == "vector_search_validator_tests"
@@ -220,7 +230,12 @@ pub fn run() -> Result<(), &'static str> {
                 .or_else(|_| EnvFilter::try_new("info"))
                 .expect("Failed to create EnvFilter"),
         )
-        .with(fmt::layer().with_target(false).with_writer(std::io::stdout))
+        .with(
+            fmt::layer()
+                .with_target(false)
+                .with_ansi(ansi)
+                .with_writer(std::io::stdout),
+        )
         .init();
 
     panic::set_hook(Box::new(|info| {
@@ -261,6 +276,7 @@ pub fn run() -> Result<(), &'static str> {
                 tmpdir,
                 verbose,
                 filters,
+                disable_colors,
                 ..
             } = args.command
             else {
@@ -272,7 +288,7 @@ pub fn run() -> Result<(), &'static str> {
             let services_subnet = Arc::new(ServicesSubnet::new(base_ip));
             let dns = dns::new(dns_ip).await;
             let db = scylla_cluster::new(scylla, scylla_default_conf, tmpdir, verbose).await;
-            let vs = vector_store_cluster::new(vector_store, verbose).await;
+            let vs = vector_store_cluster::new(vector_store, verbose, disable_colors).await;
 
             info!(
                 "{} version: {}",

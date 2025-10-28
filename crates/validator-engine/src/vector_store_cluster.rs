@@ -18,7 +18,11 @@ use tracing::debug_span;
 use vector_search_validator_tests::VectorStoreCluster;
 use vector_store::httproutes::Status;
 
-pub(crate) async fn new(path: PathBuf, verbose: bool) -> mpsc::Sender<VectorStoreCluster> {
+pub(crate) async fn new(
+    path: PathBuf,
+    verbose: bool,
+    disable_colors: bool,
+) -> mpsc::Sender<VectorStoreCluster> {
     let (tx, mut rx) = mpsc::channel(10);
 
     assert!(
@@ -26,7 +30,7 @@ pub(crate) async fn new(path: PathBuf, verbose: bool) -> mpsc::Sender<VectorStor
         "vector-store executable '{path:?}' does not exist"
     );
 
-    let mut state = State::new(path, verbose).await;
+    let mut state = State::new(path, verbose, disable_colors).await;
 
     tokio::spawn(
         async move {
@@ -50,10 +54,11 @@ struct State {
     client: Option<HttpClient>,
     version: String,
     verbose: bool,
+    disable_colors: bool,
 }
 
 impl State {
-    async fn new(path: PathBuf, verbose: bool) -> Self {
+    async fn new(path: PathBuf, verbose: bool, disable_colors: bool) -> Self {
         let version = String::from_utf8_lossy(
             &Command::new(&path)
                 .arg("--version")
@@ -71,6 +76,7 @@ impl State {
             child: None,
             client: None,
             verbose,
+            disable_colors,
         }
     }
 }
@@ -108,6 +114,10 @@ async fn start(vs_addr: SocketAddr, db_addr: SocketAddr, state: &mut State) {
         cmd.env("VECTOR_STORE_URI", vs_addr.to_string())
             .env("VECTOR_STORE_SCYLLADB_URI", db_addr.to_string())
             .env("VECTOR_STORE_THREADS", "2")
+            .env(
+                "VECTOR_STORE_DISABLE_COLORS",
+                state.disable_colors.to_string(),
+            )
             .spawn()
             .expect("start: failed to spawn vector-store"),
     );
