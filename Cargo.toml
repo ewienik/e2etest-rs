@@ -9,6 +9,7 @@ resolver = "3"
 [workspace.package]
 version = "0.6.0"
 edition = "2024"
+license = "LicenseRef-ScyllaDB-Source-Available-1.0"
 
 [workspace.dependencies]
 anyhow = "1.0.97"
@@ -42,7 +43,7 @@ syn = { version = "2.0", features = ["full"] }
 tempfile = "3.20.0"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting"] }
-tokio = { version = "1.44.1", features = ["full"] }
+tokio = { version = "1.44.2", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["full"] }
 tracing = "0.1.41"
