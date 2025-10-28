@@ -29,7 +29,6 @@ mockall = "0.13.1"
 ntest = "0.9.3"
 opensearch = { version = "2.3.0", default-features = false, features = ["rustls-tls"] }
 parquet = { version = "56.0.0", features = ["async"] }
-proc-macro2 = "1.0"
 prometheus = "0.14"
 quote = "1.0"
 rand = "0.9.2"
