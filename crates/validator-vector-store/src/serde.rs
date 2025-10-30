@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use crate::common::*;
-use crate::tests::*;
 use scylla::value::CqlValue;
+use std::time::Duration;
+use vector_search_validator_tests::common;
+use vector_search_validator_tests::common::*;
+use vector_search_validator_tests::*;
 
 pub(crate) async fn new() -> TestCase {
     let timeout = Duration::from_secs(30);
     TestCase::empty()
-        .with_init(timeout, crate::common::init)
-        .with_cleanup(timeout, crate::common::cleanup)
+        .with_init(timeout, common::init)
+        .with_cleanup(timeout, common::cleanup)
         .with_test(
             "test_serialization_deserialization_all_types",
             timeout,
@@ -20,7 +22,7 @@ pub(crate) async fn new() -> TestCase {
 }
 
 async fn test_serialization_deserialization_all_types(actors: TestActors) {
-    let (session, _client) = crate::common::prepare_connection(&actors).await;
+    let (session, _client) = common::prepare_connection(&actors).await;
 
     let cases = vec![
         ("ascii", "'random_text'"),

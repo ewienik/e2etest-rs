@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use crate::dns::DnsExt;
-use crate::scylla_cluster::ScyllaClusterExt;
-use crate::tests::*;
-use crate::vector_store_cluster::VectorStoreClusterExt;
+use crate::DnsExt;
+use crate::ScyllaClusterExt;
+use crate::TestActors;
+use crate::VectorStoreClusterExt;
 use httpclient::HttpClient;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
@@ -27,7 +27,7 @@ pub(crate) const DB_PORT: u16 = 9042;
 pub(crate) const VS_OCTET: u8 = 1;
 pub(crate) const DB_OCTET: u8 = 2;
 
-pub(crate) async fn get_default_vs_url(actors: &TestActors) -> String {
+pub async fn get_default_vs_url(actors: &TestActors) -> String {
     format!(
         "http://{}.{}:{}",
         VS_NAME,
@@ -36,11 +36,11 @@ pub(crate) async fn get_default_vs_url(actors: &TestActors) -> String {
     )
 }
 
-pub(crate) fn get_default_db_ip(actors: &TestActors) -> Ipv4Addr {
+pub fn get_default_db_ip(actors: &TestActors) -> Ipv4Addr {
     actors.services_subnet.ip(DB_OCTET)
 }
 
-pub(crate) async fn init(actors: TestActors) {
+pub async fn init(actors: TestActors) {
     info!("started");
 
     let vs_ip = actors.services_subnet.ip(VS_OCTET);
@@ -63,7 +63,7 @@ pub(crate) async fn init(actors: TestActors) {
     info!("finished");
 }
 
-pub(crate) async fn cleanup(actors: TestActors) {
+pub async fn cleanup(actors: TestActors) {
     info!("started");
     actors.dns.remove(VS_NAME.to_string()).await;
     actors.vs.stop().await;
@@ -71,7 +71,7 @@ pub(crate) async fn cleanup(actors: TestActors) {
     info!("finished");
 }
 
-pub(crate) async fn prepare_connection(actors: &TestActors) -> (Arc<Session>, HttpClient) {
+pub async fn prepare_connection(actors: &TestActors) -> (Arc<Session>, HttpClient) {
     let session = Arc::new(
         SessionBuilder::new()
             .known_node(actors.services_subnet.ip(DB_OCTET).to_string())
@@ -83,7 +83,7 @@ pub(crate) async fn prepare_connection(actors: &TestActors) -> (Arc<Session>, Ht
     (session, client)
 }
 
-pub(crate) async fn wait_for<F, Fut>(mut condition: F, msg: &str, timeout: Duration)
+pub async fn wait_for<F, Fut>(mut condition: F, msg: &str, timeout: Duration)
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
@@ -97,7 +97,7 @@ where
     .unwrap_or_else(|_| panic!("Timeout on: {msg}"))
 }
 
-pub(crate) async fn wait_for_value<F, Fut, T>(mut poll_fn: F, msg: &str, timeout: Duration) -> T
+pub async fn wait_for_value<F, Fut, T>(mut poll_fn: F, msg: &str, timeout: Duration) -> T
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<T>>,
@@ -114,7 +114,7 @@ where
     .unwrap_or_else(|_| panic!("Timeout on: {msg}"))
 }
 
-pub(crate) async fn get_query_results(query: String, session: &Session) -> QueryRowsResult {
+pub async fn get_query_results(query: String, session: &Session) -> QueryRowsResult {
     session
         .query_unpaged(query, ())
         .await
@@ -123,10 +123,7 @@ pub(crate) async fn get_query_results(query: String, session: &Session) -> Query
         .expect("failed to get rows")
 }
 
-pub(crate) async fn get_opt_query_results(
-    query: String,
-    session: &Session,
-) -> Option<QueryRowsResult> {
+pub async fn get_opt_query_results(query: String, session: &Session) -> Option<QueryRowsResult> {
     session
         .query_unpaged(query, ())
         .await
@@ -135,7 +132,7 @@ pub(crate) async fn get_opt_query_results(
         .ok()
 }
 
-pub(crate) async fn create_keyspace(session: &Session) -> String {
+pub async fn create_keyspace(session: &Session) -> String {
     let keyspace = format!("ks_{}", Uuid::new_v4().simple());
 
     // Create keyspace
@@ -153,11 +150,7 @@ pub(crate) async fn create_keyspace(session: &Session) -> String {
     keyspace
 }
 
-pub(crate) async fn create_table(
-    session: &Session,
-    columns: &str,
-    options: Option<&str>,
-) -> String {
+pub async fn create_table(session: &Session, columns: &str, options: Option<&str>) -> String {
     let table = format!("tbl_{}", Uuid::new_v4().simple());
 
     let extra = if let Some(options) = options {
@@ -175,7 +168,7 @@ pub(crate) async fn create_table(
     table
 }
 
-pub(crate) async fn create_index(
+pub async fn create_index(
     session: &Session,
     client: &HttpClient,
     table: &str,

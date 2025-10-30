@@ -1,0 +1,20 @@
+# Copyright 2025-present ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+[package]
+name = "vector-search-validator-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap.workspace = true
+hickory-server.workspace = true
+httpclient.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+vector-search-validator-scylla.workspace = true
+vector-search-validator-tests.workspace = true
+vector-search-validator-vector-store.workspace = true
+vector-store.workspace = true

@@ -13,103 +13,16 @@ use tokio::fs;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::time;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
-
-pub(crate) enum ScyllaCluster {
-    Version {
-        tx: oneshot::Sender<String>,
-    },
-    Start {
-        vs_uri: String,
-        db_ip: Ipv4Addr,
-        conf: Option<Vec<u8>>,
-    },
-    WaitForReady {
-        tx: oneshot::Sender<bool>,
-    },
-    Stop,
-    Up {
-        vs_uri: String,
-        conf: Option<Vec<u8>>,
-    },
-    Down,
-}
-
-pub(crate) trait ScyllaClusterExt {
-    /// Returns the version of the ScyllaDB executable.
-    async fn version(&self) -> String;
-
-    /// Starts the ScyllaDB cluster with the given vector store URI and database IP.
-    async fn start(&self, vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>);
-
-    /// Stops the ScyllaDB instance.
-    async fn stop(&self);
-
-    /// Waits for the ScyllaDB cluster to be ready.
-    async fn wait_for_ready(&self) -> bool;
-
-    /// Starts a paused instance back again.
-    async fn up(&self, vs_uri: String, conf: Option<Vec<u8>>);
-
-    /// Pauses an instance
-    async fn down(&self);
-}
-
-impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
-    async fn version(&self) -> String {
-        let (tx, rx) = oneshot::channel();
-        self.send(ScyllaCluster::Version { tx })
-            .await
-            .expect("ScyllaClusterExt::version: internal actor should receive request");
-        rx.await
-            .expect("ScyllaClusterExt::version: internal actor should send response")
-    }
-
-    async fn start(&self, vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>) {
-        self.send(ScyllaCluster::Start {
-            vs_uri,
-            db_ip,
-            conf,
-        })
-        .await
-        .expect("ScyllaClusterExt::start: internal actor should receive request");
-    }
-
-    async fn stop(&self) {
-        self.send(ScyllaCluster::Stop)
-            .await
-            .expect("ScyllaClusterExt::stop: internal actor should receive request");
-    }
-
-    async fn wait_for_ready(&self) -> bool {
-        let (tx, rx) = oneshot::channel();
-        self.send(ScyllaCluster::WaitForReady { tx })
-            .await
-            .expect("ScyllaClusterExt::wait_for_ready: internal actor should receive request");
-        rx.await
-            .expect("ScyllaClusterExt::wait_for_ready: internal actor should send response")
-    }
-
-    async fn up(&self, vs_uri: String, conf: Option<Vec<u8>>) {
-        self.send(ScyllaCluster::Up { vs_uri, conf })
-            .await
-            .expect("ScyllaClusterExt::up: internal actor should receive request")
-    }
-
-    async fn down(&self) {
-        self.send(ScyllaCluster::Down)
-            .await
-            .expect("ScyllaClusterExt::down: internal actor should receive request")
-    }
-}
+use vector_search_validator_tests::ScyllaCluster;
 
 pub(crate) async fn new(
     path: PathBuf,
     default_conf: PathBuf,
+    tempdir: PathBuf,
     verbose: bool,
 ) -> mpsc::Sender<ScyllaCluster> {
     let (tx, mut rx) = mpsc::channel(10);
@@ -123,7 +36,7 @@ pub(crate) async fn new(
         "scylla config '{default_conf:?}' does not exist"
     );
 
-    let mut state = State::new(path, default_conf, verbose).await;
+    let mut state = State::new(path, default_conf, tempdir, verbose).await;
 
     tokio::spawn(
         async move {
@@ -144,6 +57,7 @@ pub(crate) async fn new(
 struct State {
     path: PathBuf,
     default_conf: PathBuf,
+    tempdir: PathBuf,
     db_ip: Option<Ipv4Addr>,
     child: Option<Child>,
     workdir: Option<TempDir>,
@@ -152,7 +66,7 @@ struct State {
 }
 
 impl State {
-    async fn new(path: PathBuf, default_conf: PathBuf, verbose: bool) -> Self {
+    async fn new(path: PathBuf, default_conf: PathBuf, tempdir: PathBuf, verbose: bool) -> Self {
         let version = String::from_utf8_lossy(
             &Command::new(&path)
                 .arg("--version")
@@ -168,6 +82,7 @@ impl State {
             path,
             default_conf,
             version,
+            tempdir,
             db_ip: None,
             child: None,
             workdir: None,
@@ -250,13 +165,18 @@ async fn run_cluster(
             .arg("true")
             .arg("--smp")
             .arg("2")
+            .arg("--log-to-stdout")
+            .arg("true")
+            .arg("--logger-ostream-type")
+            .arg("stdout")
             .spawn()
             .expect("start: failed to spawn scylladb"),
     );
 }
 
 async fn start(vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>, state: &mut State) {
-    let workdir = TempDir::new().expect("start: failed to create temporary directory for scylladb");
+    let workdir = TempDir::new_in(&state.tempdir)
+        .expect("start: failed to create temporary directory for scylladb");
     run_cluster(&vs_uri, &db_ip, &conf, workdir.path(), state).await;
     state.workdir = Some(workdir);
     state.db_ip = Some(db_ip);

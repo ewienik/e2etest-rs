@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 [package]
-name = "vector-search-validator"
+name = "vector-search-validator-scylla"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-vector-search-validator-engine.workspace = true
+vector-search-validator-tests.workspace = true

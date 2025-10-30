@@ -11,79 +11,18 @@ use std::time::Duration;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::time;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
+use vector_search_validator_tests::VectorStoreCluster;
 use vector_store::httproutes::Status;
 
-pub(crate) enum VectorStoreCluster {
-    Version {
-        tx: oneshot::Sender<String>,
-    },
-    Start {
-        vs_addr: SocketAddr,
-        db_addr: SocketAddr,
-    },
-    Stop {
-        tx: oneshot::Sender<()>,
-    },
-    WaitForReady {
-        tx: oneshot::Sender<bool>,
-    },
-}
-
-pub(crate) trait VectorStoreClusterExt {
-    /// Returns the version of the vector-store binary.
-    async fn version(&self) -> String;
-
-    /// Starts the vector-store server with the given addresses.
-    async fn start(&self, vs_addr: SocketAddr, db_addr: SocketAddr);
-
-    /// Stops the vector-store server.
-    async fn stop(&self);
-
-    /// Waits for the vector-store server to be ready.
-    async fn wait_for_ready(&self) -> bool;
-}
-
-impl VectorStoreClusterExt for mpsc::Sender<VectorStoreCluster> {
-    async fn version(&self) -> String {
-        let (tx, rx) = oneshot::channel();
-        self.send(VectorStoreCluster::Version { tx })
-            .await
-            .expect("VectorStoreClusterExt::version: internal actor should receive request");
-        rx.await
-            .expect("VectorStoreClusterExt::version: internal actor should send response")
-    }
-
-    async fn start(&self, vs_addr: SocketAddr, db_addr: SocketAddr) {
-        self.send(VectorStoreCluster::Start { vs_addr, db_addr })
-            .await
-            .expect("VectorStoreClusterExt::start: internal actor should receive request");
-    }
-
-    async fn stop(&self) {
-        let (tx, rx) = oneshot::channel();
-        self.send(VectorStoreCluster::Stop { tx })
-            .await
-            .expect("VectorStoreClusterExt::stop: internal actor should receive request");
-        rx.await
-            .expect("VectorStoreClusterExt::stop: internal actor should send response");
-    }
-
-    async fn wait_for_ready(&self) -> bool {
-        let (tx, rx) = oneshot::channel();
-        self.send(VectorStoreCluster::WaitForReady { tx })
-            .await
-            .expect("VectorStoreClusterExt::wait_for_ready: internal actor should receive request");
-        rx.await
-            .expect("VectorStoreClusterExt::wait_for_ready: internal actor should send response")
-    }
-}
-
-pub(crate) async fn new(path: PathBuf, verbose: bool) -> mpsc::Sender<VectorStoreCluster> {
+pub(crate) async fn new(
+    path: PathBuf,
+    verbose: bool,
+    disable_colors: bool,
+) -> mpsc::Sender<VectorStoreCluster> {
     let (tx, mut rx) = mpsc::channel(10);
 
     assert!(
@@ -91,7 +30,7 @@ pub(crate) async fn new(path: PathBuf, verbose: bool) -> mpsc::Sender<VectorStor
         "vector-store executable '{path:?}' does not exist"
     );
 
-    let mut state = State::new(path, verbose).await;
+    let mut state = State::new(path, verbose, disable_colors).await;
 
     tokio::spawn(
         async move {
@@ -115,10 +54,11 @@ struct State {
     client: Option<HttpClient>,
     version: String,
     verbose: bool,
+    disable_colors: bool,
 }
 
 impl State {
-    async fn new(path: PathBuf, verbose: bool) -> Self {
+    async fn new(path: PathBuf, verbose: bool, disable_colors: bool) -> Self {
         let version = String::from_utf8_lossy(
             &Command::new(&path)
                 .arg("--version")
@@ -136,6 +76,7 @@ impl State {
             child: None,
             client: None,
             verbose,
+            disable_colors,
         }
     }
 }
@@ -173,6 +114,10 @@ async fn start(vs_addr: SocketAddr, db_addr: SocketAddr, state: &mut State) {
         cmd.env("VECTOR_STORE_URI", vs_addr.to_string())
             .env("VECTOR_STORE_SCYLLADB_URI", db_addr.to_string())
             .env("VECTOR_STORE_THREADS", "2")
+            .env(
+                "VECTOR_STORE_DISABLE_COLORS",
+                state.disable_colors.to_string(),
+            )
             .spawn()
             .expect("start: failed to spawn vector-store"),
     );
