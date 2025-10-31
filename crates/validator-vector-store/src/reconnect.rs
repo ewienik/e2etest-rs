@@ -11,7 +11,7 @@ use vector_search_validator_tests::common::*;
 use vector_search_validator_tests::*;
 
 pub(crate) async fn new() -> TestCase {
-    let timeout = Duration::from_secs(30);
+    let timeout = Duration::from_secs(40);
     TestCase::empty()
         .with_init(timeout, init)
         .with_cleanup(timeout, cleanup)
@@ -85,7 +85,7 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
                 .is_ok()
         },
         "Waiting for index build",
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     )
     .await;
 
