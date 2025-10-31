@@ -16,7 +16,7 @@ use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
 use vector_search_validator_tests::VectorStoreCluster;
-use vector_store::httproutes::Status;
+use vector_store::httproutes::NodeStatus;
 
 pub(crate) async fn new(
     path: PathBuf,
@@ -146,7 +146,7 @@ async fn wait_for_ready(state: &State) -> bool {
     };
 
     loop {
-        if matches!(client.status().await, Ok(Status::Serving)) {
+        if matches!(client.status().await, Ok(NodeStatus::Serving)) {
             return true;
         }
         time::sleep(Duration::from_millis(100)).await;
