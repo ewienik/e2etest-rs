@@ -137,7 +137,7 @@ pub async fn create_keyspace(session: &Session) -> String {
 
     // Create keyspace
     session.query_unpaged(
-        format!("CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}"),
+        format!("CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"),
         (),
     ).await.expect("failed to create a keyspace");
 

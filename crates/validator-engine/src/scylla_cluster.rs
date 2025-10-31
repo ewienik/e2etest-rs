@@ -169,6 +169,8 @@ async fn run_cluster(
             .arg("true")
             .arg("--logger-ostream-type")
             .arg("stdout")
+            .arg("--rf-rack-valid-keyspaces")
+            .arg("true")
             .spawn()
             .expect("start: failed to spawn scylladb"),
     );
