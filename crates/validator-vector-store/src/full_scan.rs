@@ -59,7 +59,14 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
     }
 
     wait_for(
-        || async { client.count(&index.keyspace, &index.index).await == Some(1000) },
+        || async {
+            client
+                .index_status(&index.keyspace, &index.index)
+                .await
+                .expect("failed to get index status")
+                .count
+                == 1000
+        },
         "Waiting for 1000 vectors to be indexed",
         Duration::from_secs(5),
     )

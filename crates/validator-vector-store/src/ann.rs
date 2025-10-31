@@ -75,7 +75,14 @@ async fn ann_query_returns_expected_results(actors: TestActors) {
     let index = create_index(&session, &client, &table, "v").await;
 
     wait_for(
-        || async { client.count(&index.keyspace, &index.index).await == Some(1000) },
+        || async {
+            client
+                .index_status(&index.keyspace, &index.index)
+                .await
+                .expect("failed to get index status")
+                .count
+                == 1000
+        },
         "Waiting for 1000 vectors to be indexed",
         Duration::from_secs(5),
     )
@@ -199,7 +206,14 @@ async fn ann_query_respects_limit(actors: TestActors) {
     let index = create_index(&session, &client, &table, "v").await;
 
     wait_for(
-        || async { client.count(&index.keyspace, &index.index).await == Some(10) },
+        || async {
+            client
+                .index_status(&index.keyspace, &index.index)
+                .await
+                .expect("failed to get index status")
+                .count
+                == 10
+        },
         "Waiting for 10 vectors to be indexed",
         Duration::from_secs(5),
     )
@@ -267,7 +281,14 @@ async fn ann_query_respects_limit_over_1000_vectors(actors: TestActors) {
     let index = create_index(&session, &client, &table, "v").await;
 
     wait_for(
-        || async { client.count(&index.keyspace, &index.index).await == Some(1111) },
+        || async {
+            client
+                .index_status(&index.keyspace, &index.index)
+                .await
+                .expect("failed to get index status")
+                .count
+                == 1111
+        },
         "Waiting for 1111 vectors to be indexed",
         Duration::from_secs(5),
     )

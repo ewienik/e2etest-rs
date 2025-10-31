@@ -66,8 +66,12 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
     actors.db.down().await;
 
     sleep(Duration::from_secs(1)).await;
-    let count = client.count(&index.keyspace, &index.index).await;
-    assert!(count.is_some() && count.unwrap() < 1000);
+    let count = client
+        .index_status(&index.keyspace, &index.index)
+        .await
+        .expect("failed to get index status")
+        .count;
+    assert!(count < 1000);
     actors.db.up(get_default_vs_url(&actors).await, None).await;
 
     assert!(actors.db.wait_for_ready().await);
