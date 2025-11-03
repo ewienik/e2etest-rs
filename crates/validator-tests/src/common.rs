@@ -20,6 +20,7 @@ use uuid::Uuid;
 use vector_store::IndexInfo;
 pub use vector_store::IndexName;
 pub use vector_store::KeyspaceName;
+pub use vector_store::httproutes::IndexStatus;
 
 const VS_NAME: &str = "vs";
 
@@ -114,6 +115,23 @@ where
     })
     .await
     .unwrap_or_else(|_| panic!("Timeout on: {msg}"))
+}
+
+pub async fn wait_for_index(
+    client: &HttpClient,
+    index: &IndexInfo,
+) -> vector_store::httproutes::IndexStatusResponse {
+    wait_for_value(
+        || async {
+            match client.index_status(&index.keyspace, &index.index).await {
+                Ok(resp) if resp.status == IndexStatus::Serving => Some(resp),
+                _ => None,
+            }
+        },
+        "Waiting for index to be SERVING",
+        Duration::from_secs(20),
+    )
+    .await
 }
 
 pub async fn get_query_results(query: String, session: &Session) -> QueryRowsResult {

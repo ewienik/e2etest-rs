@@ -58,19 +58,12 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
         _ => panic!("Expected SERVICE_UNAVAILABLE error, got: {result:?}"),
     }
 
-    wait_for(
-        || async {
-            client
-                .index_status(&index.keyspace, &index.index)
-                .await
-                .expect("failed to get index status")
-                .count
-                == 1000
-        },
-        "Waiting for 1000 vectors to be indexed",
-        Duration::from_secs(5),
-    )
-    .await;
+    let index_status = wait_for_index(&client, &index).await;
+
+    assert_eq!(
+        index_status.count, 1000,
+        "Expected 1000 vectors to be indexed"
+    );
 
     session
         .query_unpaged(

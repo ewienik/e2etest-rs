@@ -74,19 +74,12 @@ async fn ann_query_returns_expected_results(actors: TestActors) {
 
     let index = create_index(&session, &client, &table, "v").await;
 
-    wait_for(
-        || async {
-            client
-                .index_status(&index.keyspace, &index.index)
-                .await
-                .expect("failed to get index status")
-                .count
-                == 1000
-        },
-        "Waiting for 1000 vectors to be indexed",
-        Duration::from_secs(5),
-    )
-    .await;
+    let index_status = wait_for_index(&client, &index).await;
+
+    assert_eq!(
+        index_status.count, 1000,
+        "Expected 1000 vectors to be indexed"
+    );
 
     // Check if the query returns the expected results (recall at least 85%)
     let results = get_query_results(
@@ -205,19 +198,9 @@ async fn ann_query_respects_limit(actors: TestActors) {
     // Create index
     let index = create_index(&session, &client, &table, "v").await;
 
-    wait_for(
-        || async {
-            client
-                .index_status(&index.keyspace, &index.index)
-                .await
-                .expect("failed to get index status")
-                .count
-                == 10
-        },
-        "Waiting for 10 vectors to be indexed",
-        Duration::from_secs(5),
-    )
-    .await;
+    let index_status = wait_for_index(&client, &index).await;
+
+    assert_eq!(index_status.count, 10, "Expected 10 vectors to be indexed");
 
     // Check if queries return the expected number of results
     let results = get_query_results(
@@ -280,19 +263,12 @@ async fn ann_query_respects_limit_over_1000_vectors(actors: TestActors) {
 
     let index = create_index(&session, &client, &table, "v").await;
 
-    wait_for(
-        || async {
-            client
-                .index_status(&index.keyspace, &index.index)
-                .await
-                .expect("failed to get index status")
-                .count
-                == 1111
-        },
-        "Waiting for 1111 vectors to be indexed",
-        Duration::from_secs(5),
-    )
-    .await;
+    let index_status = wait_for_index(&client, &index).await;
+
+    assert_eq!(
+        index_status.count, 1111,
+        "Expected 1111 vectors to be indexed"
+    );
 
     // Check if queries return the expected number of results
     let results = get_query_results(
