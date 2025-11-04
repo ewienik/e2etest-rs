@@ -18,6 +18,8 @@ use tokio::time;
 use tracing::info;
 use uuid::Uuid;
 use vector_store::IndexInfo;
+pub use vector_store::IndexName;
+pub use vector_store::KeyspaceName;
 
 const VS_NAME: &str = "vs";
 
