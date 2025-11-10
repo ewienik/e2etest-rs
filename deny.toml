@@ -98,6 +98,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "LicenseRef-ScyllaDB-Source-Available-1.0",
     "ISC",
+    "OpenSSL",
     "CC0-1.0",
     "BSD-3-Clause",
     "BSL-1.0",
