@@ -23,6 +23,11 @@ pub(crate) async fn new() -> TestCase {
             timeout,
             simple_create_drop_multiple_indexes,
         )
+        .with_test(
+            "drop_table_removes_index",
+            timeout,
+            drop_table_removes_index,
+        )
 }
 
 async fn simple_create_drop_index(actors: TestActors) {
@@ -175,6 +180,59 @@ async fn simple_create_drop_multiple_indexes(actors: TestActors) {
     .await;
 
     // Drop keyspace
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop a keyspace");
+
+    info!("finished");
+}
+
+async fn drop_table_removes_index(actors: TestActors) {
+    info!("started");
+
+    let (session, client) = prepare_connection(&actors).await;
+
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(
+        &session,
+        "id INT PRIMARY KEY, embedding VECTOR<FLOAT, 3>",
+        Some("CDC = {'enabled': true}"),
+    )
+    .await;
+
+    let stmt: scylla::statement::prepared::PreparedStatement = session
+        .prepare(format!(
+            "INSERT INTO {table} (id, embedding) VALUES (?, [1.0, 2.0, 3.0])"
+        ))
+        .await
+        .expect("failed to prepare a statement");
+
+    for id in 0..1000 {
+        session
+            .execute_unpaged(&stmt, (id,))
+            .await
+            .expect("failed to insert a row");
+    }
+
+    let _ = create_index(&session, &client, &table, "embedding").await;
+
+    let stmt = session
+        .prepare(format!("DROP TABLE {keyspace}.{table}"))
+        .await
+        .expect("failed to prepare a statement");
+    session
+        .execute_unpaged(&stmt, ())
+        .await
+        .expect("failed to drop table");
+
+    wait_for(
+        || async { client.indexes().await.is_empty() },
+        "Waiting for index deletion",
+        Duration::from_secs(20),
+    )
+    .await;
+
     session
         .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
         .await
