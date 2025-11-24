@@ -22,6 +22,8 @@ pub use vector_store::IndexName;
 pub use vector_store::KeyspaceName;
 pub use vector_store::httproutes::IndexStatus;
 
+pub const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 const VS_NAME: &str = "vs";
 
 pub(crate) const VS_PORT: u16 = 6080;

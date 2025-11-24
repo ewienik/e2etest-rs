@@ -9,7 +9,7 @@ use vector_search_validator_tests::common::*;
 use vector_search_validator_tests::*;
 
 pub(crate) async fn new() -> TestCase {
-    let timeout = Duration::from_secs(30);
+    let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_init(timeout, init)
         .with_cleanup(timeout, cleanup)
