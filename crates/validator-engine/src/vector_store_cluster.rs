@@ -4,6 +4,7 @@
  */
 
 use httpclient::HttpClient;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -88,8 +89,12 @@ async fn process(msg: VectorStoreCluster, state: &mut State) {
                 .expect("process VectorStoreCluster::Version: failed to send a response");
         }
 
-        VectorStoreCluster::Start { vs_addr, db_addr } => {
-            start(vs_addr, db_addr, state).await;
+        VectorStoreCluster::Start {
+            vs_addr,
+            db_addr,
+            envs,
+        } => {
+            start(vs_addr, db_addr, envs, state).await;
         }
 
         VectorStoreCluster::Stop { tx } => {
@@ -105,22 +110,31 @@ async fn process(msg: VectorStoreCluster, state: &mut State) {
     }
 }
 
-async fn start(vs_addr: SocketAddr, db_addr: SocketAddr, state: &mut State) {
+async fn start(
+    vs_addr: SocketAddr,
+    db_addr: SocketAddr,
+    envs: HashMap<String, String>,
+    state: &mut State,
+) {
     let mut cmd = Command::new(&state.path);
     if !state.verbose {
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
     }
-    state.child = Some(
-        cmd.env("VECTOR_STORE_URI", vs_addr.to_string())
+
+    state.child = Some({
+        let cmd = cmd
+            .env("VECTOR_STORE_URI", vs_addr.to_string())
             .env("VECTOR_STORE_SCYLLADB_URI", db_addr.to_string())
             .env("VECTOR_STORE_THREADS", "2")
             .env(
                 "VECTOR_STORE_DISABLE_COLORS",
                 state.disable_colors.to_string(),
-            )
-            .spawn()
-            .expect("start: failed to spawn vector-store"),
-    );
+            );
+        envs.into_iter().for_each(|(k, v)| {
+            cmd.env(k, v);
+        });
+        cmd.spawn().expect("start: failed to spawn vector-store")
+    });
     state.client = Some(HttpClient::new(vs_addr));
 }
 
