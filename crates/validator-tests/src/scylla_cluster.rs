@@ -26,7 +26,16 @@ pub enum ScyllaCluster {
         vs_uri: String,
         conf: Option<Vec<u8>>,
     },
+    UpNode {
+        vs_uri: String,
+        db_ip: Ipv4Addr,
+        conf: Option<Vec<u8>>,
+    },
     Down {
+        tx: oneshot::Sender<()>,
+    },
+    DownNode {
+        db_ip: Ipv4Addr,
         tx: oneshot::Sender<()>,
     },
 }
@@ -54,6 +63,20 @@ pub trait ScyllaClusterExt {
 
     /// Pauses a cluster.
     fn down(&self) -> impl Future<Output = ()>;
+
+    /// Starts a single paused ScyllaDB instance back again.
+    fn up_node(
+        &self,
+        vs_uri: String,
+        db_ip: Ipv4Addr,
+        conf: Option<Vec<u8>>,
+    ) -> impl Future<Output = ()>;
+
+    /// Pauses a single ScyllaDB instance.
+    fn down_node(&self, db_ip: Ipv4Addr) -> impl Future<Output = ()>;
+
+    /// Restarts a single ScyllaDB instance.
+    fn restart(&self, vs_uri: String, db_ip: Ipv4Addr) -> impl Future<Output = ()>;
 }
 
 impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
@@ -100,6 +123,16 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
             .expect("ScyllaClusterExt::up: internal actor should receive request")
     }
 
+    async fn up_node(&self, vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>) {
+        self.send(ScyllaCluster::UpNode {
+            vs_uri,
+            db_ip,
+            conf,
+        })
+        .await
+        .expect("ScyllaClusterExt::up_node: internal actor should receive request")
+    }
+
     async fn down(&self) {
         let (tx, rx) = oneshot::channel();
         self.send(ScyllaCluster::Down { tx })
@@ -107,5 +140,20 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
             .expect("ScyllaClusterExt::down: internal actor should receive request");
         rx.await
             .expect("ScyllaClusterExt::down: internal actor should send response");
+    }
+
+    async fn down_node(&self, db_ip: Ipv4Addr) {
+        let (tx, rx) = oneshot::channel();
+        self.send(ScyllaCluster::DownNode { db_ip, tx })
+            .await
+            .expect("ScyllaClusterExt::down_node: internal actor should receive request");
+        rx.await
+            .expect("ScyllaClusterExt::down_node: internal actor should send response");
+    }
+
+    async fn restart(&self, vs_uri: String, db_ip: Ipv4Addr) {
+        self.down_node(db_ip).await;
+        self.up_node(vs_uri, db_ip, None).await;
+        assert!(self.wait_for_ready().await);
     }
 }

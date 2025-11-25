@@ -124,10 +124,24 @@ async fn process(msg: ScyllaCluster, state: &mut State) {
             up(vs_uri, conf, state).await;
         }
 
+        ScyllaCluster::UpNode {
+            vs_uri,
+            db_ip,
+            conf,
+        } => {
+            up_node(vs_uri, db_ip, conf, state).await;
+        }
+
         ScyllaCluster::Down { tx } => {
             down(state).await;
             tx.send(())
                 .expect("process ScyllaCluster::Down: failed to send a response");
+        }
+
+        ScyllaCluster::DownNode { db_ip, tx } => {
+            down_node(state, db_ip).await;
+            tx.send(())
+                .expect("process ScyllaCluster::DownNode: failed to send a response");
         }
     }
 }
@@ -270,6 +284,20 @@ async fn down(state: &mut State) {
     }
 }
 
+async fn down_node(state: &mut State, db_ip: Ipv4Addr) {
+    if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip) {
+        if let Some(mut child) = node.child.take() {
+            child
+                .start_kill()
+                .expect("down_node: failed to send SIGTERM to scylladb process");
+            child
+                .wait()
+                .await
+                .expect("down_node: failed to wait for scylladb process to exit");
+        }
+    }
+}
+
 async fn wait_for_node(state: &State, ip: Ipv4Addr) -> bool {
     let mut cmd = Command::new(&state.path);
     cmd.arg("nodetool")
@@ -332,6 +360,27 @@ async fn up(vs_uri: String, conf: Option<Vec<u8>>, state: &mut State) {
 
     for (i, db_ip, path) in nodes.into_iter() {
         let rack = format!("rack{}", i + 1);
+        let child = run_node(&vs_uri, &db_ip, &seed_ip, &conf, &path, &rack, state).await;
+        state.nodes[i].child = Some(child);
+    }
+}
+
+async fn up_node(vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>, state: &mut State) {
+    if state.nodes.is_empty() {
+        return;
+    }
+
+    // Use the first node as seed
+    let seed_ip = state.nodes[0].db_ip.to_string();
+
+    if let Some((i, node)) = state
+        .nodes
+        .iter()
+        .enumerate()
+        .find(|(_, n)| n.db_ip == db_ip)
+    {
+        let rack = format!("rack{}", i + 1);
+        let path = node.workdir.as_ref().unwrap().path().to_path_buf();
         let child = run_node(&vs_uri, &db_ip, &seed_ip, &conf, &path, &rack, state).await;
         state.nodes[i].child = Some(child);
     }
