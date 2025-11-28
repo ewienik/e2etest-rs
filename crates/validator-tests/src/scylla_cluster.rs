@@ -38,6 +38,9 @@ pub enum ScyllaCluster {
         db_ip: Ipv4Addr,
         tx: oneshot::Sender<()>,
     },
+    Flush {
+        tx: oneshot::Sender<()>,
+    },
 }
 
 pub trait ScyllaClusterExt {
@@ -77,6 +80,9 @@ pub trait ScyllaClusterExt {
 
     /// Restarts a single ScyllaDB instance.
     fn restart(&self, vs_uri: String, db_ip: Ipv4Addr) -> impl Future<Output = ()>;
+
+    /// Flushes all memtables to disk on all nodes.
+    fn flush(&self) -> impl Future<Output = ()>;
 }
 
 impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
@@ -155,5 +161,14 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
         self.down_node(db_ip).await;
         self.up_node(vs_uri, db_ip, None).await;
         assert!(self.wait_for_ready().await);
+    }
+
+    async fn flush(&self) {
+        let (tx, rx) = oneshot::channel();
+        self.send(ScyllaCluster::Flush { tx })
+            .await
+            .expect("ScyllaClusterExt::flush: internal actor should receive request");
+        rx.await
+            .expect("ScyllaClusterExt::flush: internal actor should send response");
     }
 }
