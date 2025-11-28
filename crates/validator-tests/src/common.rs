@@ -11,6 +11,7 @@ use httpclient::HttpClient;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::response::query_result::QueryRowsResult;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,15 +25,15 @@ pub use vector_store::httproutes::IndexStatus;
 
 pub const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-const VS_NAME: &str = "vs";
+pub const VS_NAME: &str = "vs";
 
-pub(crate) const VS_PORT: u16 = 6080;
-pub(crate) const DB_PORT: u16 = 9042;
+pub const VS_PORT: u16 = 6080;
+pub const DB_PORT: u16 = 9042;
 
-pub(crate) const VS_OCTET: u8 = 1;
-pub(crate) const DB_OCTET_1: u8 = 2;
-pub(crate) const DB_OCTET_2: u8 = 3;
-pub(crate) const DB_OCTET_3: u8 = 4;
+pub const VS_OCTET: u8 = 1;
+pub const DB_OCTET_1: u8 = 2;
+pub const DB_OCTET_2: u8 = 3;
+pub const DB_OCTET_3: u8 = 4;
 
 pub async fn get_default_vs_url(actors: &TestActors) -> String {
     format!(
@@ -71,7 +72,11 @@ pub async fn init(actors: TestActors) {
     assert!(actors.db.wait_for_ready().await);
     actors
         .vs
-        .start((vs_ip, VS_PORT).into(), (db_ip, DB_PORT).into())
+        .start(
+            (vs_ip, VS_PORT).into(),
+            (db_ip, DB_PORT).into(),
+            HashMap::new(),
+        )
         .await;
     assert!(actors.vs.wait_for_ready().await);
 

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -14,6 +15,7 @@ pub enum VectorStoreCluster {
     Start {
         vs_addr: SocketAddr,
         db_addr: SocketAddr,
+        envs: HashMap<String, String>,
     },
     Stop {
         tx: oneshot::Sender<()>,
@@ -28,7 +30,12 @@ pub trait VectorStoreClusterExt {
     fn version(&self) -> impl Future<Output = String>;
 
     /// Starts the vector-store server with the given addresses.
-    fn start(&self, vs_addr: SocketAddr, db_addr: SocketAddr) -> impl Future<Output = ()>;
+    fn start(
+        &self,
+        vs_addr: SocketAddr,
+        db_addr: SocketAddr,
+        envs: HashMap<String, String>,
+    ) -> impl Future<Output = ()>;
 
     /// Stops the vector-store server.
     fn stop(&self) -> impl Future<Output = ()>;
@@ -47,10 +54,14 @@ impl VectorStoreClusterExt for mpsc::Sender<VectorStoreCluster> {
             .expect("VectorStoreClusterExt::version: internal actor should send response")
     }
 
-    async fn start(&self, vs_addr: SocketAddr, db_addr: SocketAddr) {
-        self.send(VectorStoreCluster::Start { vs_addr, db_addr })
-            .await
-            .expect("VectorStoreClusterExt::start: internal actor should receive request");
+    async fn start(&self, vs_addr: SocketAddr, db_addr: SocketAddr, envs: HashMap<String, String>) {
+        self.send(VectorStoreCluster::Start {
+            vs_addr,
+            db_addr,
+            envs,
+        })
+        .await
+        .expect("VectorStoreClusterExt::start: internal actor should receive request");
     }
 
     async fn stop(&self) {
