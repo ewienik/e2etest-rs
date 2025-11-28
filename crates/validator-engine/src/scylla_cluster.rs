@@ -20,6 +20,8 @@ use tracing::debug_span;
 use tracing::info;
 use vector_search_validator_tests::ScyllaCluster;
 
+const DEFAULT_SCYLLA_CQL_PORT: u16 = 9042;
+
 pub(crate) async fn new(
     path: PathBuf,
     default_conf: PathBuf,
@@ -124,10 +126,30 @@ async fn process(msg: ScyllaCluster, state: &mut State) {
             up(vs_uri, conf, state).await;
         }
 
+        ScyllaCluster::UpNode {
+            vs_uri,
+            db_ip,
+            conf,
+        } => {
+            up_node(vs_uri, db_ip, conf, state).await;
+        }
+
         ScyllaCluster::Down { tx } => {
             down(state).await;
             tx.send(())
                 .expect("process ScyllaCluster::Down: failed to send a response");
+        }
+
+        ScyllaCluster::DownNode { db_ip, tx } => {
+            down_node(state, db_ip).await;
+            tx.send(())
+                .expect("process ScyllaCluster::DownNode: failed to send a response");
+        }
+
+        ScyllaCluster::Flush { tx } => {
+            flush(state).await;
+            tx.send(())
+                .expect("process ScyllaCluster::Flush: failed to send a response");
         }
     }
 }
@@ -270,6 +292,20 @@ async fn down(state: &mut State) {
     }
 }
 
+async fn down_node(state: &mut State, db_ip: Ipv4Addr) {
+    if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip) {
+        if let Some(mut child) = node.child.take() {
+            child
+                .start_kill()
+                .expect("down_node: failed to send SIGTERM to scylladb process");
+            child
+                .wait()
+                .await
+                .expect("down_node: failed to wait for scylladb process to exit");
+        }
+    }
+}
+
 async fn wait_for_node(state: &State, ip: Ipv4Addr) -> bool {
     let mut cmd = Command::new(&state.path);
     cmd.arg("nodetool")
@@ -287,9 +323,35 @@ async fn wait_for_node(state: &State, ip: Ipv4Addr) -> bool {
         .lines()
         .any(|line| line.starts_with(&format!("UN {ip}")))
         {
-            return true;
+            loop {
+                if is_cql_port_ready(ip).await {
+                    return true;
+                }
+                time::sleep(Duration::from_millis(100)).await;
+            }
         }
         time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn is_cql_port_ready(ip: Ipv4Addr) -> bool {
+    use std::net::SocketAddr;
+    use tokio::net::TcpStream;
+
+    let addr = SocketAddr::from((ip, DEFAULT_SCYLLA_CQL_PORT));
+
+    match tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr)).await {
+        Ok(Ok(_)) => {
+            debug!("CQL port {} is open on {}", DEFAULT_SCYLLA_CQL_PORT, ip);
+            true
+        }
+        _ => {
+            debug!(
+                "CQL port {} is not yet ready on {}",
+                DEFAULT_SCYLLA_CQL_PORT, ip
+            );
+            false
+        }
     }
 }
 
@@ -301,9 +363,9 @@ async fn wait_for_ready(state: &State) -> bool {
     }
 
     for node in &state.nodes {
-        tracing::info!("Waiting for node at IP {} to be ready...", node.db_ip);
+        tracing::info!("Waiting for node at IP {} to be ready...", &node.db_ip);
         wait_for_node(state, node.db_ip).await;
-        tracing::info!("Node at IP {} is ready.", node.db_ip);
+        tracing::info!("Node at IP {} is ready.", &node.db_ip);
     }
 
     true
@@ -334,5 +396,49 @@ async fn up(vs_uri: String, conf: Option<Vec<u8>>, state: &mut State) {
         let rack = format!("rack{}", i + 1);
         let child = run_node(&vs_uri, &db_ip, &seed_ip, &conf, &path, &rack, state).await;
         state.nodes[i].child = Some(child);
+    }
+}
+
+async fn up_node(vs_uri: String, db_ip: Ipv4Addr, conf: Option<Vec<u8>>, state: &mut State) {
+    if state.nodes.is_empty() {
+        return;
+    }
+
+    // Use the first node as seed
+    let seed_ip = state.nodes[0].db_ip.to_string();
+
+    if let Some((i, node)) = state
+        .nodes
+        .iter()
+        .enumerate()
+        .find(|(_, n)| n.db_ip == db_ip)
+    {
+        let rack = format!("rack{}", i + 1);
+        let path = node.workdir.as_ref().unwrap().path().to_path_buf();
+        let child = run_node(&vs_uri, &db_ip, &seed_ip, &conf, &path, &rack, state).await;
+        state.nodes[i].child = Some(child);
+    }
+}
+
+async fn flush(state: &State) {
+    for node in &state.nodes {
+        info!("Flushing node {}", node.db_ip);
+        let mut cmd = Command::new(&state.path);
+        cmd.arg("nodetool")
+            .arg("-h")
+            .arg(node.db_ip.to_string())
+            .arg("flush");
+
+        let output = cmd
+            .output()
+            .await
+            .expect("flush: failed to run nodetool flush");
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!("nodetool flush failed on {}: {}", node.db_ip, stderr);
+        } else {
+            info!("Flush completed on node {}", node.db_ip);
+        }
     }
 }
