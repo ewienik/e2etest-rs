@@ -5,6 +5,7 @@
 
 use crate::DnsExt;
 use crate::ScyllaClusterExt;
+use crate::ScyllaNodeConfig;
 use crate::TestActors;
 use crate::VectorStoreClusterExt;
 use httpclient::HttpClient;
@@ -52,23 +53,34 @@ pub fn get_default_db_ips(actors: &TestActors) -> Vec<Ipv4Addr> {
     ]
 }
 
-pub fn get_default_db_ip(actors: &TestActors) -> Ipv4Addr {
-    actors.services_subnet.ip(DB_OCTET_1)
+pub async fn get_default_scylla_node_configs(actors: &TestActors) -> Vec<ScyllaNodeConfig> {
+    let vs_url = get_default_vs_url(actors).await;
+    get_default_db_ips(actors)
+        .iter()
+        .map(|&ip| ScyllaNodeConfig {
+            db_ip: ip,
+            primary_vs_uris: vec![vs_url.clone()],
+            secondary_vs_uris: vec![],
+        })
+        .collect()
 }
 
 pub async fn init(actors: TestActors) {
     info!("started");
 
-    let vs_ip = actors.services_subnet.ip(VS_OCTET);
+    let node_configs = get_default_scylla_node_configs(&actors).await;
+    init_with_config(actors, node_configs).await;
 
+    info!("finished");
+}
+
+pub async fn init_with_config(actors: TestActors, node_configs: Vec<ScyllaNodeConfig>) {
+    let vs_ip = actors.services_subnet.ip(VS_OCTET);
     actors.dns.upsert(VS_NAME.to_string(), vs_ip).await;
 
-    let vs_url = get_default_vs_url(&actors).await;
+    let db_ip = node_configs.first().unwrap().db_ip; // Use the first DB node for vector store connection
 
-    let db_ips = get_default_db_ips(&actors);
-    let db_ip = db_ips[0]; // Use the first DB node for vector store connection
-
-    actors.db.start(vs_url, db_ips, None).await;
+    actors.db.start(node_configs, None).await;
     assert!(actors.db.wait_for_ready().await);
     actors
         .vs
@@ -79,8 +91,6 @@ pub async fn init(actors: TestActors) {
         )
         .await;
     assert!(actors.vs.wait_for_ready().await);
-
-    info!("finished");
 }
 
 pub async fn cleanup(actors: TestActors) {
