@@ -1,0 +1,96 @@
+/*
+ * Copyright 2025-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+use tracing::info;
+use vector_search_validator_tests::ScyllaNodeConfig;
+use vector_search_validator_tests::common::*;
+use vector_search_validator_tests::*;
+
+pub(crate) async fn new() -> TestCase {
+    let timeout = DEFAULT_TEST_TIMEOUT;
+    TestCase::empty().with_cleanup(timeout, cleanup).with_test(
+        "secondary_uri_works_correctly",
+        timeout,
+        test_secondary_uri_works_correctly,
+    )
+}
+
+async fn test_secondary_uri_works_correctly(actors: TestActors) {
+    info!("started");
+
+    let vs_url = get_default_vs_url(&actors).await;
+    let node_configs: Vec<ScyllaNodeConfig> = vec![
+        ScyllaNodeConfig {
+            db_ip: actors.services_subnet.ip(DB_OCTET_1),
+            primary_vs_uris: vec![vs_url.clone()],
+            secondary_vs_uris: vec![],
+        },
+        ScyllaNodeConfig {
+            db_ip: actors.services_subnet.ip(DB_OCTET_2),
+            primary_vs_uris: vec![],
+            secondary_vs_uris: vec![vs_url.clone()],
+        },
+        ScyllaNodeConfig {
+            db_ip: actors.services_subnet.ip(DB_OCTET_3),
+            primary_vs_uris: vec![],
+            secondary_vs_uris: vec![vs_url.clone()],
+        },
+    ];
+    init_with_config(actors.clone(), node_configs).await;
+
+    let (session, client) = prepare_connection(&actors).await;
+
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
+
+    // Insert vectors
+    for i in 0..100 {
+        let embedding = vec![i as f32, (i * 2) as f32, (i * 3) as f32];
+        session
+            .query_unpaged(
+                format!("INSERT INTO {table} (pk, v) VALUES (?, ?)"),
+                (i, &embedding),
+            )
+            .await
+            .expect("failed to insert data");
+    }
+
+    let index = create_index(&session, &client, &table, "v").await;
+
+    let index_status = wait_for_index(&client, &index).await;
+
+    assert_eq!(
+        index_status.count, 100,
+        "Expected 100 vectors to be indexed"
+    );
+
+    // Down the first node with primary URI
+    let first_node_ip = actors.services_subnet.ip(DB_OCTET_1);
+    info!("Bringing down node {first_node_ip}");
+    actors.db.down_node(first_node_ip).await;
+
+    // Should work via secondary URIs
+    let results = get_query_results(
+        format!("SELECT pk FROM {table} ORDER BY v ANN OF [0.0, 0.0, 0.0] LIMIT 10"),
+        &session,
+    )
+    .await;
+
+    let rows = results
+        .rows::<(i32,)>()
+        .expect("failed to get rows after node down");
+    assert!(
+        rows.rows_remaining() <= 10,
+        "Expected at most 10 results from ANN query after node down"
+    );
+
+    // Drop keyspace
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop a keyspace");
+
+    info!("finished");
+}
