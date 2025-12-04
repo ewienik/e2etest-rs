@@ -85,7 +85,10 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
         status == IndexStatus::Bootstrapping,
         "Full scan should be interrupted by disconnect"
     );
-    actors.db.up(get_default_vs_url(&actors).await, None).await;
+    actors
+        .db
+        .up(get_default_scylla_node_configs(&actors).await, None)
+        .await;
 
     assert!(actors.db.wait_for_ready().await);
 
@@ -158,14 +161,10 @@ async fn restarting_one_node_doesnt_break_fullscan(actors: TestActors) {
         .expect("failed to get index status");
     assert_eq!(index_status.status, IndexStatus::Bootstrapping);
 
-    let db_ip = get_default_db_ip(&actors);
-
-    info!("Restarting node {}", db_ip);
-    actors
-        .db
-        .restart(get_default_vs_url(&actors).await, db_ip)
-        .await;
-
+    let node_configs = get_default_scylla_node_configs(&actors).await;
+    let node_config = node_configs.first().unwrap();
+    info!("Restarting node {}", node_config.db_ip);
+    actors.db.restart(node_config).await;
     let index_status = wait_for_index(&client, &index).await;
 
     assert_eq!(
@@ -233,15 +232,12 @@ async fn restarting_all_nodes_doesnt_break_fullscan(actors: TestActors) {
         .expect("failed to get index status");
     assert_eq!(index_status.status, IndexStatus::Bootstrapping);
 
-    let db_ips = get_default_db_ips(&actors);
+    let node_configs = get_default_scylla_node_configs(&actors).await;
 
     // Restart each node one by one
-    for db_ip in db_ips {
-        info!("Restarting node {}", db_ip);
-        actors
-            .db
-            .restart(get_default_vs_url(&actors).await, db_ip)
-            .await;
+    for node_config in &node_configs {
+        info!("Restarting node {}", node_config.db_ip);
+        actors.db.restart(node_config).await;
     }
 
     let index_status = wait_for_index(&client, &index).await;

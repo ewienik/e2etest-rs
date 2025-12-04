@@ -16,6 +16,7 @@ use futures::stream;
 use futures::stream::StreamExt;
 pub use scylla_cluster::ScyllaCluster;
 pub use scylla_cluster::ScyllaClusterExt;
+pub use scylla_cluster::ScyllaNodeConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future;

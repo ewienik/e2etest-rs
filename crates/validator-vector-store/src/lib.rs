@@ -6,6 +6,7 @@
 mod ann;
 mod crud;
 mod full_scan;
+mod high_availability;
 mod index_status;
 mod memory_limit;
 mod reconnect;
@@ -18,6 +19,7 @@ pub async fn test_cases() -> impl Iterator<Item = (String, TestCase)> {
         ("ann", ann::new().await),
         ("crud", crud::new().await),
         ("full_scan", full_scan::new().await),
+        ("high_availability", high_availability::new().await),
         ("index_status", index_status::new().await),
         ("reconnect", reconnect::new().await),
         ("serde", serde::new().await),

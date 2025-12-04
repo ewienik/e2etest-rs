@@ -37,10 +37,9 @@ async fn memory_limit_during_index_build(actors: TestActors) {
     // Start DB
     let vs_ip = actors.services_subnet.ip(common::VS_OCTET);
     actors.dns.upsert(common::VS_NAME.to_string(), vs_ip).await;
-    let vs_url = common::get_default_vs_url(&actors).await;
-    let db_ips = common::get_default_db_ips(&actors);
-    let db_ip = *db_ips.first().unwrap();
-    actors.db.start(vs_url, db_ips, None).await;
+    let node_configs = common::get_default_scylla_node_configs(&actors).await;
+    let db_ip = node_configs.first().unwrap().db_ip;
+    actors.db.start(node_configs.clone(), None).await;
     assert!(actors.db.wait_for_ready().await);
 
     // Create table
