@@ -152,9 +152,14 @@ impl TestCase {
 
     /// Run initialization, all tests, and cleanup functions in the test case.
     async fn run(&self, actors: TestActors, test_cases: &HashSet<String>) -> Statistics {
-        let mut stats = Statistics::new(
-            self.tests.len() + self.init.is_some() as usize + self.cleanup.is_some() as usize,
-        );
+        let total = if test_cases.is_empty() {
+            // Run all tests
+            self.tests.len()
+        } else {
+            test_cases.len()
+        } + (self.init.is_some() as usize)
+            + (self.cleanup.is_some() as usize);
+        let mut stats = Statistics::new(total);
 
         if let Some((timeout, init)) = &self.init {
             stats.launched += 1;
