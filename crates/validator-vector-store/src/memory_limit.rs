@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use httpclient::HttpClient;
-use scylla::client::session_builder::SessionBuilder;
-use std::sync::Arc;
 use sysinfo::System;
 use tracing::info;
 use vector_search_validator_tests::common::IndexStatus;
@@ -14,6 +11,7 @@ use vector_search_validator_tests::*;
 pub(crate) async fn new() -> TestCase {
     let timeout = common::DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
+        .with_init(timeout, common::init)
         .with_cleanup(timeout, common::cleanup)
         .with_test(
             "memory_limit_during_index_build",
@@ -33,23 +31,11 @@ pub(crate) async fn new() -> TestCase {
 /// - drop the keyspace
 async fn memory_limit_during_index_build(actors: TestActors) {
     info!("started");
+    actors.vs.stop().await;
 
-    // Start DB
-    let vs_ip = actors.services_subnet.ip(common::VS_OCTET);
-    actors.dns.upsert(common::VS_NAME.to_string(), vs_ip).await;
-    let node_configs = common::get_default_scylla_node_configs(&actors).await;
-    let db_ip = node_configs.first().unwrap().db_ip;
-    actors.db.start(node_configs.clone(), None).await;
-    assert!(actors.db.wait_for_ready().await);
-
-    // Create table
-    let session = Arc::new(
-        SessionBuilder::new()
-            .known_node(db_ip.to_string())
-            .build()
-            .await
-            .expect("failed to create session"),
-    );
+    let vs_ip = actors.services_subnet.ip(common::VS_OCTET_1);
+    let (session, clients) =
+        common::prepare_connection_with_custom_vs_ips(&actors, vec![vs_ip]).await;
 
     let keyspace = common::create_keyspace(&session).await;
     let table =
@@ -67,8 +53,9 @@ async fn memory_limit_during_index_build(actors: TestActors) {
             .expect("failed to insert data");
     }
 
-    // Start VS with memory limit
-    let system_info = System::new_all();
+    // Set memory limit for Vector Store
+    let mut system_info = System::new_all();
+    system_info.refresh_memory();
     let used_memory = if let Some(cgroup) = system_info.cgroup_limits() {
         cgroup.rss
     } else {
@@ -81,35 +68,28 @@ async fn memory_limit_during_index_build(actors: TestActors) {
         "Setting VS memory limit to {LIMIT_MEMORY} bytes, current used memory is {used_memory} bytes, "
     );
 
-    actors
-        .vs
-        .start(
-            (vs_ip, common::VS_PORT).into(),
-            (db_ip, common::DB_PORT).into(),
-            [
-                (
-                    "VECTOR_STORE_MEMORY_LIMIT".to_string(),
-                    limit_memory.to_string(),
-                ),
-                (
-                    "VECTOR_STORE_MEMORY_USAGE_CHECK_INTERVAL".to_string(),
-                    "10ms".to_string(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .await;
+    let db_ip = actors.services_subnet.ip(common::DB_OCTET_1);
+    let vs_configs = vec![VectorStoreNodeConfig {
+        vs_ip,
+        db_ip,
+        envs: [
+            (
+                "VECTOR_STORE_MEMORY_LIMIT".to_string(),
+                limit_memory.to_string(),
+            ),
+            (
+                "VECTOR_STORE_MEMORY_USAGE_CHECK_INTERVAL".to_string(),
+                "10ms".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }];
+    actors.vs.start(vs_configs).await;
 
-    assert!(actors.vs.wait_for_ready().await);
+    let index = common::create_index(&session, &clients, &table, "v").await;
 
-    // Create index
-    let client =
-        HttpClient::new((actors.services_subnet.ip(common::VS_OCTET), common::VS_PORT).into());
-
-    let index = common::create_index(&session, &client, &table, "v").await;
-
-    let index_status = common::wait_for_index(&client, &index).await;
+    let index_status = common::wait_for_index(clients.first().unwrap(), &index).await;
     assert_eq!(
         index_status.status,
         IndexStatus::Serving,
