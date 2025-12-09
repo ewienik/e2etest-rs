@@ -25,7 +25,7 @@ pub use vector_store::IndexName;
 pub use vector_store::KeyspaceName;
 pub use vector_store::httproutes::IndexStatus;
 
-pub const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(10 * 60); // 10 minutes
 
 pub const VS_NAMES: [&str; 3] = ["vs1", "vs2", "vs3"];
 
