@@ -306,16 +306,16 @@ async fn down(state: &mut State) {
 }
 
 async fn down_node(state: &mut State, db_ip: Ipv4Addr) {
-    if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip) {
-        if let Some(mut child) = node.child.take() {
-            child
-                .start_kill()
-                .expect("down_node: failed to send SIGTERM to scylladb process");
-            child
-                .wait()
-                .await
-                .expect("down_node: failed to wait for scylladb process to exit");
-        }
+    if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip)
+        && let Some(mut child) = node.child.take()
+    {
+        child
+            .start_kill()
+            .expect("down_node: failed to send SIGTERM to scylladb process");
+        child
+            .wait()
+            .await
+            .expect("down_node: failed to wait for scylladb process to exit");
     }
 }
 
