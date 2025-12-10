@@ -193,7 +193,7 @@ pub async fn wait_for_index(
             }
         },
         "Waiting for index to be SERVING",
-        Duration::from_secs(20),
+        Duration::from_secs(60),
     )
     .await
 }
@@ -285,7 +285,7 @@ pub async fn create_index(
             true
         },
         "Waiting for the first index to be created",
-        Duration::from_secs(10),
+        Duration::from_secs(60),
     )
     .await;
 

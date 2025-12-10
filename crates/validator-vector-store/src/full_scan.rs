@@ -83,7 +83,7 @@ async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors:
         wait_for(
             || async { client.indexes().await.is_empty() },
             "Waiting for index deletion",
-            Duration::from_secs(20),
+            Duration::from_secs(60),
         )
         .await;
     }

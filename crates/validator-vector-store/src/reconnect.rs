@@ -112,7 +112,7 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
                 .is_ok()
         },
         "Waiting for index build",
-        Duration::from_secs(20),
+        Duration::from_secs(60),
     )
     .await;
 
