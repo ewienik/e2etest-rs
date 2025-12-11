@@ -57,7 +57,7 @@ tracing-test = "0.2.5"
 usearch = "2.21.3"
 utoipa = { version = "5.3.1", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
-utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
+utoipa-swagger-ui = { version = "9.0.0", features = ["axum", "vendored"] }
 uuid = "1.16.0"
 vector-search-validator-engine = { path = "crates/validator-engine" }
 vector-search-validator-scylla = { git = "https://github.com/scylladb/scylladb", rev = "d6c14de" }
