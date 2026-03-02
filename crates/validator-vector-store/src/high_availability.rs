@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use std::collections::HashMap;
+
 use async_backtrace::framed;
 use scylla::statement::Statement;
 use tracing::info;
@@ -27,33 +29,51 @@ async fn test_secondary_uri_works_correctly(actors: TestActors) {
     let vs_urls = get_default_vs_urls(&actors).await;
     let vs_url = &vs_urls[0];
 
+    let cert_path = actors.tls.cert_path().await;
+    let key_path = actors.tls.key_path().await;
     let scylla_configs: Vec<ScyllaNodeConfig> = vec![
         ScyllaNodeConfig {
             db_ip: actors.services_subnet.ip(DB_OCTET_1),
             primary_vs_uris: vec![vs_url.clone()],
             secondary_vs_uris: vec![],
             args: default_scylla_args(),
-            config: None,
+            cert_path: Some(cert_path.clone()),
+            key_path: Some(key_path.clone()),
+            extra_config: None,
         },
         ScyllaNodeConfig {
             db_ip: actors.services_subnet.ip(DB_OCTET_2),
             primary_vs_uris: vec![],
             secondary_vs_uris: vec![vs_url.clone()],
             args: default_scylla_args(),
-            config: None,
+            cert_path: Some(cert_path.clone()),
+            key_path: Some(key_path.clone()),
+            extra_config: None,
         },
         ScyllaNodeConfig {
             db_ip: actors.services_subnet.ip(DB_OCTET_3),
             primary_vs_uris: vec![],
             secondary_vs_uris: vec![vs_url.clone()],
             args: default_scylla_args(),
-            config: None,
+            cert_path: Some(cert_path.clone()),
+            key_path: Some(key_path.clone()),
+            extra_config: None,
         },
     ];
+    let cert_env = actors
+        .tls
+        .cert_path()
+        .await
+        .to_str()
+        .expect("cert path must be valid UTF-8")
+        .to_string();
     let vs_configs = vec![VectorStoreNodeConfig {
         vs_ip: actors.services_subnet.ip(VS_OCTET_1),
         db_ip: actors.services_subnet.ip(DB_OCTET_1),
-        envs: Default::default(),
+        envs: HashMap::from([(
+            "VECTOR_STORE_SCYLLADB_CERTIFICATE_FILE".to_string(),
+            cert_env,
+        )]),
         user: None,
         password: None,
     }];

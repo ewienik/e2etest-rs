@@ -9,12 +9,14 @@ use crate::ScyllaNodeConfig;
 use crate::ScyllaProxyClusterExt;
 use crate::ScyllaProxyNodeConfig;
 use crate::TestActors;
+use crate::TlsExt;
 use crate::VectorStoreClusterExt;
 use crate::VectorStoreNodeConfig;
 use async_backtrace::framed;
 use httpclient::HttpClient;
 use itertools::Itertools;
 use scylla::client::session::Session;
+use scylla::client::session::TlsContext;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::response::query_result::QueryRowsResult;
 use scylla::statement::Statement;
@@ -52,6 +54,16 @@ pub const VS_OCTET_1: u8 = 21;
 pub const VS_OCTET_2: u8 = 22;
 pub const VS_OCTET_3: u8 = 23;
 
+/// Returns the default DB IPs for a given subnet. This variant can be used
+/// before `TestActors` is constructed (e.g. during TLS cert generation).
+pub fn get_default_db_ips_for_subnet(subnet: &crate::ServicesSubnet) -> Vec<Ipv4Addr> {
+    vec![
+        subnet.ip(DB_OCTET_1),
+        subnet.ip(DB_OCTET_2),
+        subnet.ip(DB_OCTET_3),
+    ]
+}
+
 #[framed]
 pub async fn get_default_vs_urls(actors: &TestActors) -> Vec<String> {
     let domain = actors.dns.domain().await;
@@ -72,11 +84,7 @@ pub fn get_default_vs_ips(actors: &TestActors) -> Vec<Ipv4Addr> {
 
 #[framed]
 pub fn get_default_db_ips(actors: &TestActors) -> Vec<Ipv4Addr> {
-    vec![
-        actors.services_subnet.ip(DB_OCTET_1),
-        actors.services_subnet.ip(DB_OCTET_2),
-        actors.services_subnet.ip(DB_OCTET_3),
-    ]
+    get_default_db_ips_for_subnet(&actors.services_subnet)
 }
 
 pub fn get_default_db_proxy_ips(actors: &TestActors) -> Vec<Ipv4Addr> {
@@ -90,6 +98,8 @@ pub fn get_default_db_proxy_ips(actors: &TestActors) -> Vec<Ipv4Addr> {
 #[framed]
 pub async fn get_default_scylla_node_configs(actors: &TestActors) -> Vec<ScyllaNodeConfig> {
     let default_vs_urls = get_default_vs_urls(actors).await;
+    let cert_path = actors.tls.cert_path().await;
+    let key_path = actors.tls.key_path().await;
     get_default_db_ips(actors)
         .iter()
         .enumerate()
@@ -100,7 +110,9 @@ pub async fn get_default_scylla_node_configs(actors: &TestActors) -> Vec<ScyllaN
                 primary_vs_uris: vec![vs_urls.remove(i)],
                 secondary_vs_uris: vs_urls,
                 args: crate::default_scylla_args(),
-                config: None,
+                cert_path: Some(cert_path.clone()),
+                key_path: Some(key_path.clone()),
+                extra_config: None,
             }
         })
         .collect()
@@ -122,8 +134,15 @@ pub async fn get_default_scylla_proxy_node_configs(
 }
 
 #[framed]
-pub fn get_default_vs_node_configs(actors: &TestActors) -> Vec<VectorStoreNodeConfig> {
+pub async fn get_default_vs_node_configs(actors: &TestActors) -> Vec<VectorStoreNodeConfig> {
     let db_ips = get_default_db_ips(actors);
+    let cert_path = actors
+        .tls
+        .cert_path()
+        .await
+        .to_str()
+        .expect("cert path is not valid UTF-8")
+        .to_string();
     get_default_vs_ips(actors)
         .iter()
         .zip(db_ips.iter())
@@ -132,7 +151,12 @@ pub fn get_default_vs_node_configs(actors: &TestActors) -> Vec<VectorStoreNodeCo
             db_ip,
             user: None,
             password: None,
-            envs: HashMap::new(),
+            envs: [(
+                "VECTOR_STORE_SCYLLADB_CERTIFICATE_FILE".to_string(),
+                cert_path.clone(),
+            )]
+            .into_iter()
+            .collect(),
         })
         .collect()
 }
@@ -148,7 +172,27 @@ pub fn get_proxy_vs_node_configs(actors: &TestActors) -> Vec<VectorStoreNodeConf
             db_ip,
             user: None,
             password: None,
-            envs: HashMap::new(),
+            envs: Default::default(),
+        })
+        .collect()
+}
+
+/// Computes the proxy translation map from the known DB and proxy IPs.
+/// This is the same mapping that `ScyllaProxyClusterExt::start` returns,
+/// and can be used to reconstruct VS configs for proxy-based tests without
+/// needing the original return value.
+#[framed]
+pub fn get_proxy_translation_map(
+    actors: &TestActors,
+) -> HashMap<std::net::SocketAddr, std::net::SocketAddr> {
+    get_default_db_ips(actors)
+        .into_iter()
+        .zip(get_default_db_proxy_ips(actors).into_iter())
+        .map(|(real_ip, proxy_ip)| {
+            (
+                std::net::SocketAddr::from((real_ip, DB_PORT)),
+                std::net::SocketAddr::from((proxy_ip, DB_PORT)),
+            )
         })
         .collect()
 }
@@ -158,7 +202,7 @@ pub async fn init(actors: TestActors) {
     info!("started");
 
     let scylla_configs = get_default_scylla_node_configs(&actors).await;
-    let vs_configs = get_default_vs_node_configs(&actors);
+    let vs_configs = get_default_vs_node_configs(&actors).await;
     init_with_config(actors, scylla_configs, vs_configs).await;
 
     info!("finished");
@@ -170,7 +214,17 @@ pub async fn init_with_proxy(actors: TestActors) {
 
     init_dns(&actors).await;
 
-    let scylla_configs = get_default_scylla_node_configs(&actors).await;
+    // Proxy operates at CQL frame level and cannot handle TLS, so ScyllaDB
+    // must be started without TLS when using the proxy.
+    let scylla_configs: Vec<ScyllaNodeConfig> = get_default_scylla_node_configs(&actors)
+        .await
+        .into_iter()
+        .map(|mut c| {
+            c.cert_path = None;
+            c.key_path = None;
+            c
+        })
+        .collect();
     let scylla_proxy_configs = get_default_scylla_proxy_node_configs(&actors).await;
     let mut vs_configs = get_proxy_vs_node_configs(&actors);
 
@@ -198,7 +252,17 @@ pub async fn init_with_proxy_single_vs(actors: TestActors) {
 
     init_dns(&actors).await;
 
-    let mut scylla_configs = get_default_scylla_node_configs(&actors).await;
+    // Proxy operates at CQL frame level and cannot handle TLS, so ScyllaDB
+    // must be started without TLS when using the proxy.
+    let mut scylla_configs: Vec<ScyllaNodeConfig> = get_default_scylla_node_configs(&actors)
+        .await
+        .into_iter()
+        .map(|mut c| {
+            c.cert_path = None;
+            c.key_path = None;
+            c
+        })
+        .collect();
     let first_vs_url = scylla_configs
         .first()
         .unwrap()
@@ -274,9 +338,11 @@ pub async fn prepare_connection_with_custom_vs_ips(
     actors: &TestActors,
     vs_ips: Vec<Ipv4Addr>,
 ) -> (Arc<Session>, Vec<HttpClient>) {
+    let tls_config = actors.tls.client_tls_config().await;
     let session = Arc::new(
         SessionBuilder::new()
             .known_node(actors.services_subnet.ip(DB_OCTET_1).to_string())
+            .tls_context(Some(TlsContext::from(tls_config)))
             .build()
             .await
             .expect("failed to create session"),
@@ -294,10 +360,12 @@ pub async fn prepare_connection_with_auth(
     user: &str,
     password: &str,
 ) -> (Arc<Session>, Vec<HttpClient>) {
+    let tls_config = actors.tls.client_tls_config().await;
     let session = Arc::new(
         SessionBuilder::new()
             .known_node(actors.services_subnet.ip(DB_OCTET_1).to_string())
             .user(user, password)
+            .tls_context(Some(TlsContext::from(tls_config)))
             .build()
             .await
             .expect("failed to create session"),
@@ -322,6 +390,45 @@ pub async fn prepare_connection_single_vs(actors: &TestActors) -> (Arc<Session>,
         get_default_vs_ips(actors).into_iter().take(1).collect(),
     )
     .await
+}
+
+/// Creates a CQL session and VS HTTP clients without TLS.
+/// Use this variant for tests that go through the scylla-proxy, which
+/// operates at the CQL frame level and cannot handle TLS traffic.
+#[framed]
+pub async fn prepare_connection_no_tls(actors: &TestActors) -> (Arc<Session>, Vec<HttpClient>) {
+    prepare_connection_with_custom_vs_ips_no_tls(actors, get_default_vs_ips(actors)).await
+}
+
+/// Creates a CQL session (without TLS) and VS HTTP clients for a single VS.
+#[framed]
+pub async fn prepare_connection_single_vs_no_tls(
+    actors: &TestActors,
+) -> (Arc<Session>, Vec<HttpClient>) {
+    prepare_connection_with_custom_vs_ips_no_tls(
+        actors,
+        get_default_vs_ips(actors).into_iter().take(1).collect(),
+    )
+    .await
+}
+
+#[framed]
+pub async fn prepare_connection_with_custom_vs_ips_no_tls(
+    actors: &TestActors,
+    vs_ips: Vec<Ipv4Addr>,
+) -> (Arc<Session>, Vec<HttpClient>) {
+    let session = Arc::new(
+        SessionBuilder::new()
+            .known_node(actors.services_subnet.ip(DB_OCTET_1).to_string())
+            .build()
+            .await
+            .expect("failed to create session"),
+    );
+    let clients = vs_ips
+        .iter()
+        .map(|&ip| HttpClient::new((ip, VS_PORT).into()))
+        .collect();
+    (session, clients)
 }
 
 #[framed]

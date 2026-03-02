@@ -12,6 +12,7 @@ async-backtrace.workspace = true
 itertools.workspace = true
 futures.workspace = true
 httpclient.workspace = true
+rustls.workspace = true
 scylla.workspace = true
 scylla-proxy.workspace = true
 serde_json.workspace = true

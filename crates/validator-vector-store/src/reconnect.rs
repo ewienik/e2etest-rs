@@ -52,7 +52,7 @@ pub(crate) async fn new() -> TestCase {
 async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
     info!("started");
 
-    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let (session, clients) = prepare_connection_single_vs_no_tls(&actors).await;
     let client = clients.first().unwrap();
 
     let keyspace = create_keyspace(&session).await;
@@ -214,7 +214,7 @@ async fn reconnect_doesnt_break_fullscan(actors: TestActors) {
 async fn restarting_one_node_doesnt_break_fullscan(actors: TestActors) {
     info!("started");
 
-    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let (session, clients) = prepare_connection_single_vs_no_tls(&actors).await;
     let client = clients.first().unwrap();
 
     info!("Creating a table and inserting data");
@@ -334,7 +334,7 @@ async fn restarting_one_node_doesnt_break_fullscan(actors: TestActors) {
 async fn restarting_all_nodes_doesnt_break_fullscan(actors: TestActors) {
     info!("started");
 
-    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let (session, clients) = prepare_connection_single_vs_no_tls(&actors).await;
     let client = clients.first().unwrap();
 
     info!("Creating a table and inserting data");
@@ -473,7 +473,7 @@ async fn restarting_all_nodes_doesnt_break_fullscan(actors: TestActors) {
 async fn test_restarting_vs_cluster_does_not_break_setup(actors: TestActors) {
     info!("started");
 
-    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let (session, clients) = prepare_connection_single_vs_no_tls(&actors).await;
     let client = clients.first().unwrap();
 
     info!("Creating a table and inserting data");
@@ -525,7 +525,14 @@ async fn test_restarting_vs_cluster_does_not_break_setup(actors: TestActors) {
 
     actors
         .vs
-        .start(get_default_vs_node_configs(&actors).pipe(|mut nodes| {
+        .start(get_proxy_vs_node_configs(&actors).pipe(|mut nodes| {
+            let translation_map = get_proxy_translation_map(&actors);
+            for node in nodes.iter_mut() {
+                node.envs.insert(
+                    "VECTOR_STORE_CQL_URI_TRANSLATION_MAP".to_string(),
+                    serde_json::to_string(&translation_map).unwrap(),
+                );
+            }
             nodes.truncate(1);
             nodes
         }))

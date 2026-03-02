@@ -14,6 +14,14 @@ use vector_store::httproutes::NodeStatus;
 
 const WAITING_FOR_DB_DISCOVERY: Duration = Duration::from_secs(5);
 
+/// Builds the ScyllaDB config YAML with authentication enabled.
+fn scylla_auth_config() -> Vec<u8> {
+    r#"authenticator: PasswordAuthenticator
+authorizer: CassandraAuthorizer"#
+        .as_bytes()
+        .to_vec()
+}
+
 #[framed]
 pub(crate) async fn new() -> TestCase {
     let timeout = DEFAULT_TEST_TIMEOUT;
@@ -37,14 +45,11 @@ async fn vs_doesnt_work_without_permission(actors: TestActors) {
     info!("started");
 
     let mut scylla_configs = get_default_scylla_node_configs(&actors).await;
-    let mut vs_configs = get_default_vs_node_configs(&actors);
+    let mut vs_configs = get_default_vs_node_configs(&actors).await;
 
+    let auth_config = scylla_auth_config();
     for config in scylla_configs.iter_mut() {
-        config.config = Some(
-            "authenticator: PasswordAuthenticator\nauthorizer: CassandraAuthorizer"
-                .as_bytes()
-                .to_vec(),
-        );
+        config.extra_config = Some(auth_config.clone());
     }
 
     for config in vs_configs.iter_mut() {
@@ -61,7 +66,7 @@ async fn vs_doesnt_work_without_permission(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra");
+    info!("Connecting to scylladb as cassandra over TLS");
     let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
 
     info!("Vector-store's should be in ConnectingToDb state");
@@ -97,14 +102,11 @@ async fn vs_works_when_permission_granted(actors: TestActors) {
     info!("started");
 
     let mut scylla_configs = get_default_scylla_node_configs(&actors).await;
-    let mut vs_configs = get_default_vs_node_configs(&actors);
+    let mut vs_configs = get_default_vs_node_configs(&actors).await;
 
+    let auth_config = scylla_auth_config();
     for config in scylla_configs.iter_mut() {
-        config.config = Some(
-            "authenticator: PasswordAuthenticator\nauthorizer: CassandraAuthorizer"
-                .as_bytes()
-                .to_vec(),
-        );
+        config.extra_config = Some(auth_config.clone());
     }
 
     for config in vs_configs.iter_mut() {
@@ -121,7 +123,7 @@ async fn vs_works_when_permission_granted(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra");
+    info!("Connecting to scylladb as cassandra over TLS");
     let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
 
     info!("Vector-store's should be in ConnectingToDb state");
@@ -168,14 +170,11 @@ async fn cdc_works_with_auth(actors: TestActors) {
     info!("started");
 
     let mut scylla_configs = get_default_scylla_node_configs(&actors).await;
-    let mut vs_configs = get_default_vs_node_configs(&actors);
+    let mut vs_configs = get_default_vs_node_configs(&actors).await;
 
+    let auth_config = scylla_auth_config();
     for config in scylla_configs.iter_mut() {
-        config.config = Some(
-            "authenticator: PasswordAuthenticator\nauthorizer: CassandraAuthorizer"
-                .as_bytes()
-                .to_vec(),
-        );
+        config.extra_config = Some(auth_config.clone());
     }
 
     for config in vs_configs.iter_mut() {
@@ -192,7 +191,7 @@ async fn cdc_works_with_auth(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra");
+    info!("Connecting to scylladb as cassandra over TLS");
     let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
 
     info!("Creating a role alice with VECTOR_SEARCH_INDEXING and CDC permissions");

@@ -7,6 +7,7 @@ mod dns;
 mod firewall;
 mod scylla_cluster;
 mod scylla_proxy_cluster;
+mod tls;
 mod vector_store_cluster;
 
 use async_backtrace::frame;
@@ -225,6 +226,10 @@ pub fn run() -> Result<(), &'static str> {
         ),
         _ => (true, "info,hickory_server=warn"),
     };
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install aws-lc-rs crypto provider");
+
     tracing_subscriber::registry()
         .with({
             if let Command::Run {
@@ -307,6 +312,12 @@ pub fn run() -> Result<(), &'static str> {
             validate_different_subnet(dns_ip, base_ip);
 
             let services_subnet = Arc::new(ServicesSubnet::new(base_ip));
+            let tls = tls::new(
+                &vector_search_validator_tests::common::get_default_db_ips_for_subnet(
+                    &services_subnet,
+                ),
+            )
+            .await;
             let dns = dns::new(dns_ip).await;
             let firewall = firewall::new().await;
             let db =
@@ -329,6 +340,7 @@ pub fn run() -> Result<(), &'static str> {
             let result = vector_search_validator_tests::run(
                 TestActors {
                     services_subnet,
+                    tls,
                     dns,
                     firewall,
                     db,

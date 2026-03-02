@@ -168,9 +168,32 @@ async fn run_node(
     rack: &str,
     state: &State,
 ) -> Child {
-    let conf = if let Some(conf) = node_config.config.as_ref() {
+    let has_tls = node_config.cert_path.is_some() && node_config.key_path.is_some();
+    let has_extra = node_config.extra_config.is_some();
+
+    let conf = if has_tls || has_extra {
+        let mut config = Vec::new();
+        if let (Some(cert), Some(key)) = (&node_config.cert_path, &node_config.key_path) {
+            config.extend_from_slice(
+                format!(
+                    r#"client_encryption_options:
+  enabled: true
+  certificate: {cert}
+  keyfile: {key}"#,
+                    cert = cert.display(),
+                    key = key.display()
+                )
+                .as_bytes(),
+            );
+        }
+        if let Some(extra) = &node_config.extra_config {
+            if !config.is_empty() {
+                config.push(b'\n');
+            }
+            config.extend_from_slice(extra);
+        }
         let conf_path = path.join("scylla.conf");
-        fs::write(&conf_path, conf)
+        fs::write(&conf_path, config)
             .await
             .expect("start: failed to write scylla config");
         conf_path

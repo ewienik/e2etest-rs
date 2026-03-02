@@ -5,6 +5,7 @@
 
 use async_backtrace::framed;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
@@ -66,8 +67,13 @@ pub struct ScyllaNodeConfig {
     pub secondary_vs_uris: Vec<String>,
     /// Additional args to pass to the ScyllaDB process.
     pub args: Vec<String>,
-    /// Optional config overrides for scylla.yaml.
-    pub config: Option<Vec<u8>>,
+    /// Optional path to the TLS certificate file for client encryption.
+    pub cert_path: Option<PathBuf>,
+    /// Optional path to the TLS key file for client encryption.
+    pub key_path: Option<PathBuf>,
+    /// Optional extra YAML config to append to the ScyllaDB options file
+    /// (e.g. authentication settings).
+    pub extra_config: Option<Vec<u8>>,
 }
 
 pub enum ScyllaCluster {

@@ -30,7 +30,7 @@ pub(crate) async fn new() -> TestCase {
 async fn full_scan_is_completed_when_responding_to_messages_concurrently(actors: TestActors) {
     info!("started");
 
-    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let (session, clients) = prepare_connection_single_vs_no_tls(&actors).await;
     let client = clients.first().unwrap();
 
     let keyspace = create_keyspace(&session).await;

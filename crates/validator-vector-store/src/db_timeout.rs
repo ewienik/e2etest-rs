@@ -46,7 +46,7 @@ pub(crate) async fn new() -> TestCase {
 #[framed]
 async fn client_timeout_doesnt_stop_cdc(actors: TestActors) {
     info!("started");
-    let (session, clients) = prepare_connection(&actors).await;
+    let (session, clients) = prepare_connection_no_tls(&actors).await;
     let keyspace = create_keyspace(&session).await;
     let table = create_table(
         &session,

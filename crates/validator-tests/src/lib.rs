@@ -8,6 +8,7 @@ mod dns;
 mod firewall;
 mod scylla_cluster;
 mod scylla_proxy_cluster;
+mod tls;
 mod vector_store_cluster;
 
 use async_backtrace::frame;
@@ -36,6 +37,8 @@ use std::panic;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
+pub use tls::Tls;
+pub use tls::TlsExt;
 use tokio::sync::mpsc;
 use tokio::time;
 use tracing::Instrument;
@@ -75,6 +78,7 @@ impl ServicesSubnet {
 #[derive(Clone)]
 pub struct TestActors {
     pub services_subnet: Arc<ServicesSubnet>,
+    pub tls: mpsc::Sender<Tls>,
     pub dns: mpsc::Sender<Dns>,
     pub firewall: mpsc::Sender<Firewall>,
     pub db: mpsc::Sender<ScyllaCluster>,
