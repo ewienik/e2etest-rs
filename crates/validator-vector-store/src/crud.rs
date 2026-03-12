@@ -7,6 +7,7 @@ use async_backtrace::framed;
 use tracing::info;
 use vector_search_validator_tests::common::*;
 use vector_search_validator_tests::*;
+use vector_store::httproutes::IndexStatus;
 
 #[framed]
 pub(crate) async fn new() -> TestCase {
@@ -28,6 +29,11 @@ pub(crate) async fn new() -> TestCase {
             "drop_table_removes_index",
             timeout,
             drop_table_removes_index,
+        )
+        .with_test(
+            "null_vector_is_not_indexed",
+            timeout,
+            null_vector_is_not_indexed,
         )
 }
 
@@ -256,6 +262,51 @@ async fn drop_table_removes_index(actors: TestActors) {
             DEFAULT_OPERATION_TIMEOUT,
         )
         .await;
+    }
+
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop a keyspace");
+
+    info!("finished");
+}
+
+#[framed]
+async fn null_vector_is_not_indexed(actors: TestActors) {
+    info!("started");
+
+    let (session, clients) = prepare_connection(&actors).await;
+
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
+
+    // Insert one row with a vector and one row with a null vector
+    session
+        .query_unpaged(
+            format!("INSERT INTO {table} (pk, v) VALUES (?, ?)"),
+            (1i32, &vec![1.0f32, 1.0f32, 1.0f32]),
+        )
+        .await
+        .expect("failed to insert row with vector");
+    session
+        .query_unpaged(format!("INSERT INTO {table} (pk) VALUES (?)"), (2i32,))
+        .await
+        .expect("failed to insert row with null vector");
+
+    let index = create_index(CreateIndexQuery::new(&session, &clients, &table, "v")).await;
+
+    for client in &clients {
+        let index_status = wait_for_index(client, &index).await;
+        assert_eq!(
+            index_status.status,
+            IndexStatus::Serving,
+            "Expected index to be SERVING after full scan"
+        );
+        assert_eq!(
+            index_status.count, 1,
+            "Expected only 1 vector to be indexed (null vector must be skipped)"
+        );
     }
 
     session
