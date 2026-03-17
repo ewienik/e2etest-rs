@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 async-backtrace.workspace = true
+bcrypt.workspace = true
 httpclient.workspace = true
 scylla.workspace = true
 scylla-proxy.workspace = true

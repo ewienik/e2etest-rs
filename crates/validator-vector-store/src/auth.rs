@@ -14,12 +14,17 @@ use vector_store::httproutes::NodeStatus;
 
 const WAITING_FOR_DB_DISCOVERY: Duration = Duration::from_secs(5);
 
-/// Builds the ScyllaDB config YAML with authentication enabled.
+/// Builds the ScyllaDB config YAML with authentication enabled and superuser credentials set.
 fn scylla_auth_config() -> Vec<u8> {
-    r#"authenticator: PasswordAuthenticator
-authorizer: CassandraAuthorizer"#
-        .as_bytes()
-        .to_vec()
+    let salted = bcrypt::hash("cassandra", bcrypt::DEFAULT_COST)
+        .expect("failed to hash superuser password");
+    format!(
+        "authenticator: PasswordAuthenticator\n\
+         authorizer: CassandraAuthorizer\n\
+         auth_superuser_name: cassandra\n\
+         auth_superuser_salted_password: '{salted}'"
+    )
+    .into_bytes()
 }
 
 #[framed]
