@@ -17,5 +17,6 @@ serde_json.workspace = true
 tap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 vector-search-validator-tests.workspace = true
 vector-store.workspace = true

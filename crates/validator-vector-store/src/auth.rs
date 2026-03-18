@@ -4,9 +4,11 @@
  */
 
 use async_backtrace::framed;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
+use uuid::Uuid;
 use vector_search_validator_tests::common::*;
 use vector_search_validator_tests::*;
 use vector_store::httproutes::IndexStatus;
@@ -14,14 +16,21 @@ use vector_store::httproutes::NodeStatus;
 
 const WAITING_FOR_DB_DISCOVERY: Duration = Duration::from_secs(5);
 
+static SUPERUSER_NAME: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().simple().to_string());
+static SUPERUSER_PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().simple().to_string());
+static SUPERUSER_SALTED_PASSWORD: LazyLock<String> = LazyLock::new(|| {
+    bcrypt::hash(&*SUPERUSER_PASSWORD, bcrypt::DEFAULT_COST)
+        .expect("failed to hash superuser password")
+});
+
 /// Builds the ScyllaDB config YAML with authentication enabled and superuser credentials set.
 fn scylla_auth_config() -> Vec<u8> {
-    let salted = bcrypt::hash("cassandra", bcrypt::DEFAULT_COST)
-        .expect("failed to hash superuser password");
+    let name = &*SUPERUSER_NAME;
+    let salted = &*SUPERUSER_SALTED_PASSWORD;
     format!(
         "authenticator: PasswordAuthenticator\n\
          authorizer: CassandraAuthorizer\n\
-         auth_superuser_name: cassandra\n\
+         auth_superuser_name: '{name}'\n\
          auth_superuser_salted_password: '{salted}'"
     )
     .into_bytes()
@@ -71,8 +80,9 @@ async fn vs_doesnt_work_without_permission(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra over TLS");
-    let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
+    info!("Connecting to scylladb as superuser over TLS");
+    let (session, clients) =
+        prepare_connection_with_auth(&actors, &SUPERUSER_NAME, &SUPERUSER_PASSWORD).await;
 
     info!("Vector-store's should be in ConnectingToDb state");
     for client in clients.iter() {
@@ -128,8 +138,9 @@ async fn vs_works_when_permission_granted(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra over TLS");
-    let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
+    info!("Connecting to scylladb as superuser over TLS");
+    let (session, clients) =
+        prepare_connection_with_auth(&actors, &SUPERUSER_NAME, &SUPERUSER_PASSWORD).await;
 
     info!("Vector-store's should be in ConnectingToDb state");
     for client in clients.iter() {
@@ -196,8 +207,9 @@ async fn cdc_works_with_auth(actors: TestActors) {
     info!("Waiting for DB discovery");
     sleep(WAITING_FOR_DB_DISCOVERY).await;
 
-    info!("Connecting to scylladb as cassandra over TLS");
-    let (session, clients) = prepare_connection_with_auth(&actors, "cassandra", "cassandra").await;
+    info!("Connecting to scylladb as superuser over TLS");
+    let (session, clients) =
+        prepare_connection_with_auth(&actors, &SUPERUSER_NAME, &SUPERUSER_PASSWORD).await;
 
     info!("Creating a role alice with VECTOR_SEARCH_INDEXING and CDC permissions");
     session
