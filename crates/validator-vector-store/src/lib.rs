@@ -6,6 +6,7 @@
 mod ann;
 mod auth;
 mod cdc;
+mod connection_timeout;
 mod crud;
 mod db_timeout;
 mod full_scan;
@@ -26,6 +27,7 @@ pub async fn test_cases() -> impl Iterator<Item = (String, TestCase)> {
         ("ann", ann::new().await),
         ("auth", auth::new().await),
         ("cdc", cdc::new().await),
+        ("connection_timeout", connection_timeout::new().await),
         ("crud", crud::new().await),
         ("db_timeout", db_timeout::new().await),
         ("full_scan", full_scan::new().await),
