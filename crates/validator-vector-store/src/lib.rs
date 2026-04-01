@@ -9,6 +9,7 @@ mod cdc;
 mod connection_timeout;
 mod crud;
 mod db_timeout;
+mod filtering;
 mod full_scan;
 mod high_availability;
 mod index_create;
@@ -30,6 +31,7 @@ pub async fn test_cases() -> impl Iterator<Item = (String, TestCase)> {
         ("connection_timeout", connection_timeout::new().await),
         ("crud", crud::new().await),
         ("db_timeout", db_timeout::new().await),
+        ("filtering", filtering::new().await),
         ("full_scan", full_scan::new().await),
         ("high_availability", high_availability::new().await),
         ("index_status", index_status::new().await),
