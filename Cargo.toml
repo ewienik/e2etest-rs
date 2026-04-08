@@ -20,6 +20,7 @@ axum = { version = "0.8.1", features = ["macros"] }
 axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 axum-server-dual-protocol = "0.7.0"
 bcrypt = "0.15"
+const-hex = "1.18.1"
 clap = { version = "4.5.40", features = ["derive"] }
 chrono = "0.4.43"
 criterion = { version = "0.8.2", features = ["async_tokio"] }

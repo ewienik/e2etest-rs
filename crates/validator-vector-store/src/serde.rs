@@ -29,6 +29,7 @@ async fn test_serialization_deserialization_all_types(actors: TestActors) {
     let cases = vec![
         ("ascii", "'random_text'"),
         ("bigint", "1234"),
+        ("blob", "0xdeadbeef"),
         ("boolean", "true"),
         ("date", "'2023-10-01'"),
         ("double", "3.14159"),
