@@ -95,6 +95,9 @@ enum Command {
         /// Filters to select specific tests to run.
         /// The syntax is as follows:
         ///     `<partially_matching_test_file_name>::<partially_matching_test_case_name>`
+        /// Wrap either side in double quotes to require an exact match, for example:
+        ///     `"crud"::`
+        ///     `::"simple_create"`
         /// Without specifying `::`, the filter will try to match both the file and test names.
         #[arg(value_name = "FILTER")]
         filters: Vec<String>,
@@ -126,12 +129,42 @@ fn validate_different_subnet(dns_ip: Ipv4Addr, base_ip: Ipv4Addr) {
     );
 }
 
-fn fetch_matching_tests(filter: &str, test_case: &TestCase) -> HashSet<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FilterMatcher<'a> {
+    Any,
+    Partial(&'a str),
+    Exact(&'a str),
+}
+
+impl<'a> FilterMatcher<'a> {
+    fn new(filter: &'a str) -> Self {
+        if filter.is_empty() {
+            Self::Any
+        } else if let Some(filter) = filter
+            .strip_prefix('"')
+            .and_then(|filter| filter.strip_suffix('"'))
+        {
+            Self::Exact(filter)
+        } else {
+            Self::Partial(filter)
+        }
+    }
+
+    fn matches(self, candidate: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Partial(filter) => candidate.contains(filter),
+            Self::Exact(filter) => candidate == filter,
+        }
+    }
+}
+
+fn fetch_matching_tests(filter: FilterMatcher<'_>, test_case: &TestCase) -> HashSet<String> {
     test_case
         .tests()
         .iter()
         .filter_map(|(test_name, _, _)| {
-            if !filter.is_empty() && test_name.contains(filter) {
+            if filter.matches(test_name) {
                 Some(test_name.clone())
             } else {
                 None
@@ -173,19 +206,30 @@ fn parse_test_filters(
     for filter in filters {
         // Check for <file>::<test> syntax
         if let Some((file_part, test_part)) = filter.split_once("::") {
+            let file_filter = FilterMatcher::new(file_part);
+            let test_filter = FilterMatcher::new(test_part);
+
             for (file_name, test_case) in test_cases {
-                if file_part.is_empty() || file_name.contains(file_part) {
-                    let matching_tests = fetch_matching_tests(test_part, test_case);
-                    // If test_part is empty, run all tests in file
-                    if !matching_tests.is_empty() || test_part.is_empty() {
-                        update_filter_map(&mut filter_map, file_name, matching_tests);
-                    }
+                if !file_filter.matches(file_name) {
+                    continue;
+                }
+
+                if matches!(test_filter, FilterMatcher::Any) {
+                    filter_map.entry(file_name.to_string()).or_default();
+                    continue;
+                }
+
+                let matching_tests = fetch_matching_tests(test_filter, test_case);
+                if !matching_tests.is_empty() {
+                    update_filter_map(&mut filter_map, file_name, matching_tests);
                 }
             }
         } else {
             // Not found `::`, check for matching both file and test case name
+            let filter = FilterMatcher::new(filter);
+
             for (file_name, test_case) in test_cases {
-                if file_name.contains(filter) {
+                if filter.matches(file_name) {
                     filter_map.entry(file_name.to_string()).or_default();
                 }
                 let matching_tests = fetch_matching_tests(filter, test_case);
@@ -406,6 +450,19 @@ pub(crate) mod validator_tests {
         ]
     }
 
+    fn make_overlapping_test_cases() -> Vec<(String, TestCase)> {
+        vec![
+            (
+                "crud".to_string(),
+                make_dummy_test_cases(&["simple_create", "simple_create_extra"]),
+            ),
+            (
+                "crud_extra".to_string(),
+                make_dummy_test_cases(&["simple_create", "simple_create_additional"]),
+            ),
+        ]
+    }
+
     #[test]
     fn test_no_filters_runs_all() {
         let test_cases = make_test_cases();
@@ -473,5 +530,37 @@ pub(crate) mod validator_tests {
         assert!(result["crud"].contains("simple_create"));
         assert!(result["other"].contains("simple_misc"));
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_exact_file_match_syntax() {
+        let test_cases = make_overlapping_test_cases();
+        let filters = vec!["\"crud\"::".to_string()];
+        let result = parse_test_filters(&filters, &test_cases);
+        assert!(result.contains_key("crud"));
+        assert!(result["crud"].is_empty());
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_exact_test_case_match_syntax() {
+        let test_cases = make_overlapping_test_cases();
+        let filters = vec!["::\"simple_create\"".to_string()];
+        let result = parse_test_filters(&filters, &test_cases);
+        assert!(result["crud"].contains("simple_create"));
+        assert!(!result["crud"].contains("simple_create_extra"));
+        assert!(result["crud_extra"].contains("simple_create"));
+        assert!(!result["crud_extra"].contains("simple_create_additional"));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_exact_file_and_test_case_syntax() {
+        let test_cases = make_overlapping_test_cases();
+        let filters = vec!["\"crud\"::\"simple_create\"".to_string()];
+        let result = parse_test_filters(&filters, &test_cases);
+        assert!(result["crud"].contains("simple_create"));
+        assert!(!result["crud"].contains("simple_create_extra"));
+        assert_eq!(result.len(), 1);
     }
 }
