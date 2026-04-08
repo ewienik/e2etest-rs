@@ -90,6 +90,46 @@ type TestFuture = BoxFuture<'static, ()>;
 
 type TestFn = Box<dyn Fn(TestActors) -> TestFuture>;
 
+#[derive(Debug, Default)]
+pub struct RunReport {
+    failed_tests: Vec<String>,
+}
+
+impl RunReport {
+    pub fn failed_tests(&self) -> &[String] {
+        &self.failed_tests
+    }
+
+    pub fn failed_tests_summary(&self) -> Option<String> {
+        format_failed_tests(&self.failed_tests)
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.failed_tests.is_empty()
+    }
+}
+
+impl From<Statistics> for RunReport {
+    fn from(stats: Statistics) -> Self {
+        Self {
+            failed_tests: stats.failed_tests,
+        }
+    }
+}
+
+pub fn format_failed_tests(failed_tests: &[String]) -> Option<String> {
+    if failed_tests.is_empty() {
+        return None;
+    }
+
+    let failed_tests = failed_tests
+        .iter()
+        .map(|failed_test| format!("- {failed_test}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!("Failed tests:\n{failed_tests}"))
+}
+
 #[derive(Debug)]
 /// Statistics for a test run, including total tests, launched, successful, and failed.
 pub(crate) struct Statistics {
@@ -97,6 +137,7 @@ pub(crate) struct Statistics {
     launched: usize,
     ok: usize,
     failed: usize,
+    failed_tests: Vec<String>,
 }
 
 impl Statistics {
@@ -106,6 +147,7 @@ impl Statistics {
             launched: 0,
             ok: 0,
             failed: 0,
+            failed_tests: vec![],
         }
     }
 
@@ -114,6 +156,12 @@ impl Statistics {
         self.launched += other.launched;
         self.ok += other.ok;
         self.failed += other.failed;
+        self.failed_tests.extend(other.failed_tests.iter().cloned());
+    }
+
+    fn record_failure(&mut self, failed_test: impl Into<String>) {
+        self.failed += 1;
+        self.failed_tests.push(failed_test.into());
     }
 }
 
@@ -175,6 +223,7 @@ impl TestCase {
     async fn run(
         &self,
         actors: TestActors,
+        test_case_name: &str,
         test_cases: &HashSet<String>,
         backtrace: Backtrace,
     ) -> Statistics {
@@ -197,7 +246,7 @@ impl TestCase {
             )
             .await
             {
-                stats.failed += 1;
+                stats.record_failure(format!("{test_case_name}::init"));
                 return stats;
             }
             stats.ok += 1;
@@ -209,18 +258,21 @@ impl TestCase {
             })
             .then(|(name, timeout, test)| {
                 let actors = actors.clone();
-                stats.launched += 1;
                 let backtrace = backtrace.clone();
                 async move {
-                    run_single(error_span!("test", name), *timeout, test(actors), backtrace).await
+                    let ok =
+                        run_single(error_span!("test", name), *timeout, test(actors), backtrace)
+                            .await;
+                    (name, ok)
                 }
             })
-            .for_each(|ok| {
+            .for_each(|(name, ok)| {
+                stats.launched += 1;
                 if ok {
                     stats.ok += 1;
                 } else {
-                    stats.failed += 1;
-                };
+                    stats.record_failure(format!("{test_case_name}::{name}"));
+                }
                 future::ready(())
             })
             .await;
@@ -235,7 +287,7 @@ impl TestCase {
             )
             .await
             {
-                stats.failed += 1;
+                stats.record_failure(format!("{test_case_name}::cleanup"));
             } else {
                 stats.ok += 1;
             }
@@ -290,7 +342,7 @@ pub async fn run(
     actors: TestActors,
     test_cases: Vec<(String, TestCase)>,
     filter_map: Arc<HashMap<String, HashSet<String>>>,
-) -> bool {
+) -> RunReport {
     let backtrace = setup_panic_hook();
 
     let stats = stream::iter(test_cases.into_iter())
@@ -307,6 +359,7 @@ pub async fn run(
                 let stats = test_case
                     .run(
                         actors,
+                        &file_name,
                         filter.get(&file_name).unwrap_or(&HashSet::new()),
                         backtrace,
                     )
@@ -330,10 +383,10 @@ pub async fn run(
 
     if stats.failed > 0 {
         error!("test run failed: {stats:?}");
-        return false;
+        return stats.into();
     }
     info!("test run ok: {stats:?}");
-    true
+    stats.into()
 }
 
 #[derive(Clone, Debug)]
@@ -364,4 +417,70 @@ fn setup_panic_hook() -> Backtrace {
 
 fn clear_panic_hook() {
     _ = panic::take_hook();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::net::Ipv4Addr;
+    use tokio::sync::mpsc;
+
+    fn dummy_test_actors() -> TestActors {
+        let services_subnet = Arc::new(ServicesSubnet::new(Ipv4Addr::new(127, 0, 2, 1)));
+        let (tls, _) = mpsc::channel(1);
+        let (dns, _) = mpsc::channel(1);
+        let (firewall, _) = mpsc::channel(1);
+        let (db, _) = mpsc::channel(1);
+        let (vs, _) = mpsc::channel(1);
+        let (db_proxy, _) = mpsc::channel(1);
+
+        TestActors {
+            services_subnet,
+            tls,
+            dns,
+            firewall,
+            db,
+            vs,
+            db_proxy,
+        }
+    }
+
+    #[test]
+    fn formats_failed_tests_as_bulleted_list() {
+        let failed_tests = vec!["crud::boom".to_string(), "crud::cleanup".to_string()];
+
+        assert_eq!(
+            format_failed_tests(&failed_tests).as_deref(),
+            Some("Failed tests:\n- crud::boom\n- crud::cleanup")
+        );
+    }
+
+    #[tokio::test]
+    async fn collects_failed_test_names() {
+        let timeout = Duration::from_secs(1);
+        let test_case = TestCase::empty()
+            .with_test("ok", timeout, |_actors| async {})
+            .with_test("boom", timeout, |_actors| async {
+                panic!("boom");
+            })
+            .with_cleanup(timeout, |_actors| async {
+                panic!("cleanup");
+            });
+
+        let stats = test_case
+            .run(
+                dummy_test_actors(),
+                "crud",
+                &HashSet::new(),
+                Backtrace::new(),
+            )
+            .await;
+
+        assert_eq!(stats.failed, 2);
+        assert_eq!(
+            stats.failed_tests,
+            &["crud::boom".to_string(), "crud::cleanup".to_string()]
+        );
+    }
 }
