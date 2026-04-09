@@ -21,7 +21,7 @@ fn generate_test_vectors(num_vectors: usize) -> (Vec<f32>, HashMap<i32, Vec<f32>
 
     let embeddings: HashMap<i32, Vec<f32>> = (0..num_vectors)
         .map(|i| {
-            let offset = (i as f32) * 0.0001; // Small offset to test quantization precision loss
+            let offset = (i as f32) * 0.001; // Small offset to test quantization precision loss
             let embedding = vec![
                 query_vector[0] + offset * 2.0, // Different weights to rotate in space
                 query_vector[1] + offset * 4.0,
@@ -157,10 +157,10 @@ async fn non_quantized_index_returns_correctly_ranked_vectors(actors: TestActors
 }
 
 #[framed]
-// This test verifies that f16 quantization leads to a loss of precision.
+// This test verifies that i8 quantization leads to a loss of precision.
 // Test vectors are generated such that their distance from the query vector increases
 // with their primary key (pk). The differences are small and are lost when vectors
-// are converted to f16.
+// are converted to i8.
 //
 // As a result, the vector search algorithm treats many distinct vectors as identical.
 // When multiple vectors have the same similarity score, their relative order in the
@@ -187,13 +187,13 @@ async fn quantized_index_returns_incorrectly_ranked_vectors_due_to_precision_los
         &clients,
         &table,
         [
-            ("quantization", "f16"),
+            ("quantization", "i8"),
             ("oversampling", "5.0"),
             ("rescoring", "false"),
         ],
     )
     .await;
-    info!("created index with f16 quantization");
+    info!("created index with i8 quantization");
 
     let results = get_query_results(
         format!(
@@ -231,7 +231,7 @@ async fn quantized_index_returns_incorrectly_ranked_vectors_due_to_precision_los
 #[framed]
 // This test demonstrates that rescoring can correct the ranking inaccuracies introduced by quantization.
 //
-// The initial search is performed on the quantized (f16) index. As shown in the previous test,
+// The initial search is performed on the quantized (i8) index. As shown in the previous test,
 // this leads to incorrectly ordered results for vectors with tied similarity scores due to precision loss.
 //
 // By enabling rescoring, the system recalculates the exact distances using the original, full-precision
@@ -254,13 +254,13 @@ async fn rescoring_ranks_results_correctly_for_quantized_index(actors: TestActor
         &clients,
         &table,
         [
-            ("quantization", "f16"),
+            ("quantization", "i8"),
             ("oversampling", "5.0"),
             ("rescoring", "true"),
         ],
     )
     .await;
-    info!("created index with f16 quantization and rescoring enabled");
+    info!("created index with i8 quantization and rescoring enabled");
 
     let results = get_query_results(
         format!(
