@@ -381,7 +381,7 @@ pub fn run() -> Result<(), &'static str> {
 
             let filter_map = parse_test_filters(&filters, &test_cases);
 
-            let result = vector_search_validator_tests::run(
+            let report = vector_search_validator_tests::run(
                 TestActors {
                     services_subnet,
                     tls,
@@ -394,9 +394,7 @@ pub fn run() -> Result<(), &'static str> {
                 test_cases,
                 Arc::new(filter_map),
             )
-            .await
-            .then_some(())
-            .ok_or("Some vector-search-validator tests failed");
+            .await;
 
             info!("Waiting for all tasks to finish...");
             const FINISH_TASKS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -413,7 +411,14 @@ pub fn run() -> Result<(), &'static str> {
                 info!("All tasks finished");
             }
 
-            result
+            if let Some(failed_tests) = report.failed_tests_summary() {
+                error!("{failed_tests}");
+            }
+
+            report
+                .is_success()
+                .then_some(())
+                .ok_or("Some vector-search-validator tests failed")
         }))
 }
 
