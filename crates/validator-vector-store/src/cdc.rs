@@ -10,6 +10,7 @@ use vector_search_validator_tests::common::*;
 use vector_search_validator_tests::*;
 
 const FINE_GRAINED_CDC_MAX_LATENCY: Duration = Duration::from_secs(2);
+const CDC_MAX_LATENCY: Duration = Duration::from_secs(60);
 
 #[framed]
 pub(crate) async fn new() -> TestCase {
@@ -32,6 +33,9 @@ pub(crate) async fn new() -> TestCase {
             timeout,
             cdc_delete_visible_immediately,
         )
+        .with_test("cdc_lwt_insert_visible", timeout, cdc_lwt_insert_visible)
+        .with_test("cdc_lwt_update_visible", timeout, cdc_lwt_update_visible)
+        .with_test("cdc_lwt_delete_visible", timeout, cdc_lwt_delete_visible)
 }
 
 #[framed]
@@ -213,6 +217,196 @@ async fn cdc_delete_visible_immediately(actors: TestActors) {
         },
         "Waiting for CDC delete",
         FINE_GRAINED_CDC_MAX_LATENCY,
+    )
+    .await;
+
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop keyspace");
+
+    info!("finished");
+}
+
+#[framed]
+async fn cdc_lwt_insert_visible(actors: TestActors) {
+    info!("started");
+
+    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let client = clients.first().unwrap();
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
+    let index = create_index(CreateIndexQuery::new(&session, &clients, &table, "v")).await;
+
+    let status = wait_for_index(client, &index).await;
+    assert_eq!(status.count, 0, "Index should start empty");
+
+    // LWT insert
+    session
+        .query_unpaged(
+            format!("INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0]) IF NOT EXISTS"),
+            (),
+        )
+        .await
+        .expect("failed to insert data");
+
+    // Wait for the LWT write to become visible in the index
+    wait_for(
+        || async {
+            let status = client.index_status(&index.keyspace, &index.index).await;
+            matches!(status, Ok(s) if s.count == 1)
+        },
+        "Waiting for CDC LWT insert",
+        CDC_MAX_LATENCY,
+    )
+    .await;
+
+    // Verify ANN query returns the inserted row
+    let result = get_query_results(
+        format!("SELECT pk FROM {table} ORDER BY v ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
+        &session,
+    )
+    .await;
+    assert_eq!(result.rows_num(), 1, "Expected 1 row from ANN query");
+
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop keyspace");
+
+    info!("finished");
+}
+
+#[framed]
+async fn cdc_lwt_update_visible(actors: TestActors) {
+    info!("started");
+
+    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let client = clients.first().unwrap();
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
+
+    session
+        .query_unpaged(
+            format!("INSERT INTO {table} (pk, v) VALUES (1, [0.0, 0.0, 0.0])"),
+            (),
+        )
+        .await
+        .expect("failed to insert data");
+    session
+        .query_unpaged(
+            format!("INSERT INTO {table} (pk, v) VALUES (2, [5.0, 5.0, 5.0])"),
+            (),
+        )
+        .await
+        .expect("failed to insert data");
+
+    let index = create_index(
+        CreateIndexQuery::new(&session, &clients, &table, "v")
+            .options([("similarity_function", "euclidean")]),
+    )
+    .await;
+
+    let status = wait_for_index(client, &index).await;
+    assert_eq!(
+        status.count, 2,
+        "Index should have 2 vectors after full scan"
+    );
+
+    // Verify ANN query for [10,10,10] returns pk=2 (closer than pk=1)
+    let result = get_query_results(
+        format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
+        &session,
+    )
+    .await;
+    let rows: Vec<(i32,)> = result
+        .rows::<(i32,)>()
+        .expect("failed to get rows")
+        .map(|r| r.expect("failed to get row"))
+        .collect();
+    assert_eq!(rows.len(), 1, "Expected 1 row");
+    assert_eq!(
+        rows[0].0, 2,
+        "Before update: pk=2 should be closest to [10,10,10]"
+    );
+
+    // LWT update pk=1 vector to [10,10,10] (closer than pk=2)
+    session
+        .query_unpaged(
+            format!("UPDATE {table} SET v = [10.0, 10.0, 10.0] WHERE pk = 1 IF EXISTS"),
+            (),
+        )
+        .await
+        .expect("failed to update data");
+
+    // Wait for the LWT write to become visible in the index
+    wait_for(
+        || async {
+            let result = get_opt_query_results(
+                format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
+                &session,
+            )
+            .await;
+            result.is_some_and(|result| {
+                let rows: Vec<(i32,)> = result
+                    .rows::<(i32,)>()
+                    .expect("failed to get rows")
+                    .map(|r| r.expect("failed to get row"))
+                    .collect();
+                rows.len() == 1 && rows[0].0 == 1
+            })
+        },
+        "Waiting for CDC LWT update",
+        CDC_MAX_LATENCY,
+    )
+    .await;
+
+    session
+        .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
+        .await
+        .expect("failed to drop keyspace");
+
+    info!("finished");
+}
+
+#[framed]
+async fn cdc_lwt_delete_visible(actors: TestActors) {
+    info!("started");
+
+    let (session, clients) = prepare_connection_single_vs(&actors).await;
+    let client = clients.first().unwrap();
+    let keyspace = create_keyspace(&session).await;
+    let table = create_table(&session, "pk INT PRIMARY KEY, v VECTOR<FLOAT, 3>", None).await;
+
+    for pk in 1..=3 {
+        session
+            .query_unpaged(
+                format!("INSERT INTO {table} (pk, v) VALUES ({pk}, [1.0, 1.0, 1.0])"),
+                (),
+            )
+            .await
+            .expect("failed to insert data");
+    }
+
+    let index = create_index(CreateIndexQuery::new(&session, &clients, &table, "v")).await;
+
+    let status = wait_for_index(client, &index).await;
+    assert_eq!(status.count, 3, "Index should have 3 vectors");
+
+    // LWT delete one row
+    session
+        .query_unpaged(format!("DELETE FROM {table} WHERE pk = 2 IF EXISTS"), ())
+        .await
+        .expect("failed to delete data");
+
+    // Check that count decreases to 2 within CDC latency
+    wait_for(
+        || async {
+            let status = client.index_status(&index.keyspace, &index.index).await;
+            matches!(status, Ok(s) if s.count == 2)
+        },
+        "Waiting for CDC LWT delete",
+        CDC_MAX_LATENCY,
     )
     .await;
 
