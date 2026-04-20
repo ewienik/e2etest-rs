@@ -60,24 +60,24 @@ async fn cdc_insert_visible_immediately(actors: TestActors) {
         .await
         .expect("failed to insert data");
 
+    // Verify ANN query returns the inserted row
     // Should timeout only when using wide-framed CDC reader
-    wait_for(
+    let pk = wait_for_value(
         || async {
-            let status = client.index_status(&index.keyspace, &index.index).await;
-            matches!(status, Ok(s) if s.count == 1)
+            let result = get_opt_query_results(
+                format!("SELECT pk FROM {table} ORDER BY v ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
+                &session,
+            )
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 1).then_some(pk)
         },
-        "Waiting for CDC insert",
+        "Waiting for ANN query after CDC insert",
         FINE_GRAINED_CDC_MAX_LATENCY,
     )
     .await;
-
-    // Verify ANN query returns the inserted row
-    let result = get_query_results(
-        format!("SELECT pk FROM {table} ORDER BY v ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
-        &session,
-    )
-    .await;
-    assert_eq!(result.rows_num(), 1, "Expected 1 row from ANN query");
+    assert_eq!(pk, 1, "Expected pk=1 returned by ANN query");
 
     session
         .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
@@ -124,21 +124,22 @@ async fn cdc_update_visible_immediately(actors: TestActors) {
     );
 
     // Verify ANN query for [10,10,10] returns pk=2 (closer than pk=1)
-    let result = get_query_results(
-        format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
-        &session,
+    let pk = wait_for_value(
+        || async {
+            let result = get_opt_query_results(
+                format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
+                &session,
+            )
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 2).then_some(pk)
+        },
+        "Waiting for initial ANN query after index build",
+        CDC_MAX_LATENCY,
     )
     .await;
-    let rows: Vec<(i32,)> = result
-        .rows::<(i32,)>()
-        .expect("failed to get rows")
-        .map(|r| r.expect("failed to get row"))
-        .collect();
-    assert_eq!(rows.len(), 1, "Expected 1 row");
-    assert_eq!(
-        rows[0].0, 2,
-        "Before update: pk=2 should be closest to [10,10,10]"
-    );
+    assert_eq!(pk, 2, "Before update: pk=2 should be closest to [10,10,10]");
 
     // Update pk=1 vector to [10,10,10] (closer than pk=2) - fine-grained CDC reader should pick this up
     session
@@ -150,26 +151,22 @@ async fn cdc_update_visible_immediately(actors: TestActors) {
         .expect("failed to update data");
 
     // Should timeout only when using wide-framed CDC reader
-    wait_for(
+    let pk = wait_for_value(
         || async {
             let result = get_opt_query_results(
                 format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
                 &session,
             )
-            .await;
-            result.is_some_and(|result| {
-                let rows: Vec<(i32,)> = result
-                    .rows::<(i32,)>()
-                    .expect("failed to get rows")
-                    .map(|r| r.expect("failed to get row"))
-                    .collect();
-                rows.len() == 1 && rows[0].0 == 1
-            })
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 1).then_some(pk)
         },
-        "Waiting for CDC update",
+        "Waiting for ANN query after CDC update",
         FINE_GRAINED_CDC_MAX_LATENCY,
     )
     .await;
+    assert_eq!(pk, 1, "After update: pk=1 should be closest to [10,10,10]");
 
     session
         .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
@@ -250,24 +247,23 @@ async fn cdc_lwt_insert_visible(actors: TestActors) {
         .await
         .expect("failed to insert data");
 
-    // Wait for the LWT write to become visible in the index
-    wait_for(
+    // Verify ANN query returns the inserted row
+    let pk = wait_for_value(
         || async {
-            let status = client.index_status(&index.keyspace, &index.index).await;
-            matches!(status, Ok(s) if s.count == 1)
+            let result = get_opt_query_results(
+                format!("SELECT pk FROM {table} ORDER BY v ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
+                &session,
+            )
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 1).then_some(pk)
         },
-        "Waiting for CDC LWT insert",
+        "Waiting for ANN query after CDC LWT insert",
         CDC_MAX_LATENCY,
     )
     .await;
-
-    // Verify ANN query returns the inserted row
-    let result = get_query_results(
-        format!("SELECT pk FROM {table} ORDER BY v ANN OF [1.0, 2.0, 3.0] LIMIT 1"),
-        &session,
-    )
-    .await;
-    assert_eq!(result.rows_num(), 1, "Expected 1 row from ANN query");
+    assert_eq!(pk, 1, "Unexpected primary key returned by ANN query");
 
     session
         .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
@@ -314,21 +310,22 @@ async fn cdc_lwt_update_visible(actors: TestActors) {
     );
 
     // Verify ANN query for [10,10,10] returns pk=2 (closer than pk=1)
-    let result = get_query_results(
-        format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
-        &session,
+    let pk = wait_for_value(
+        || async {
+            let result = get_opt_query_results(
+                format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
+                &session,
+            )
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 2).then_some(pk)
+        },
+        "Waiting for initial ANN query after index build",
+        CDC_MAX_LATENCY,
     )
     .await;
-    let rows: Vec<(i32,)> = result
-        .rows::<(i32,)>()
-        .expect("failed to get rows")
-        .map(|r| r.expect("failed to get row"))
-        .collect();
-    assert_eq!(rows.len(), 1, "Expected 1 row");
-    assert_eq!(
-        rows[0].0, 2,
-        "Before update: pk=2 should be closest to [10,10,10]"
-    );
+    assert_eq!(pk, 2, "Before update: pk=2 should be closest to [10,10,10]");
 
     // LWT update pk=1 vector to [10,10,10] (closer than pk=2)
     session
@@ -340,26 +337,25 @@ async fn cdc_lwt_update_visible(actors: TestActors) {
         .expect("failed to update data");
 
     // Wait for the LWT write to become visible in the index
-    wait_for(
+    let pk = wait_for_value(
         || async {
             let result = get_opt_query_results(
                 format!("SELECT pk FROM {table} ORDER BY v ANN OF [10.0, 10.0, 10.0] LIMIT 1"),
                 &session,
             )
-            .await;
-            result.is_some_and(|result| {
-                let rows: Vec<(i32,)> = result
-                    .rows::<(i32,)>()
-                    .expect("failed to get rows")
-                    .map(|r| r.expect("failed to get row"))
-                    .collect();
-                rows.len() == 1 && rows[0].0 == 1
-            })
+            .await?;
+            let mut rows = result.rows::<(i32,)>().ok()?;
+            let pk = rows.next()?.ok()?.0;
+            (rows.next().is_none() && pk == 1).then_some(pk)
         },
-        "Waiting for CDC LWT update",
+        "Waiting for ANN query after CDC LWT update",
         CDC_MAX_LATENCY,
     )
     .await;
+    assert_eq!(
+        pk, 1,
+        "After LWT update: pk=1 should be closest to [10,10,10]"
+    );
 
     session
         .query_unpaged(format!("DROP KEYSPACE {keyspace}"), ())
