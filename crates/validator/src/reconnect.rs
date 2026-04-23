@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use crate::TestActors;
+use crate::common::*;
 use async_backtrace::framed;
 use scylla_proxy::Condition;
 use scylla_proxy::Reaction;
@@ -11,9 +13,11 @@ use scylla_proxy::RequestRule;
 use std::time::Duration;
 use tap::Pipe;
 use tracing::info;
+use vector_search_validator_tests::FirewallExt;
 use vector_search_validator_tests::ScyllaClusterExt;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::ScyllaProxyClusterExt;
+use vector_search_validator_tests::TestCase;
+use vector_search_validator_tests::VectorStoreClusterExt;
 use vector_store::httproutes::IndexStatus;
 
 const FRAME_DELAY: Duration = Duration::from_millis(100);
@@ -21,7 +25,7 @@ const DATASET_SIZE: i32 = 100;
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(12); // slightly more than default 10s
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_init(timeout, init_with_proxy_single_vs)

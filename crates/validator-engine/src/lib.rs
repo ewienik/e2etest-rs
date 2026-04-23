@@ -26,71 +26,35 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::runtime::Builder;
 use tokio::runtime::Handle;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time;
 use tracing::error;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
-use vector_search_validator_tests::DnsExt;
-use vector_search_validator_tests::ScyllaClusterExt;
-use vector_search_validator_tests::ServicesSubnet;
-use vector_search_validator_tests::TestActors;
+use vector_search_validator_tests::Dns;
+use vector_search_validator_tests::Firewall;
+use vector_search_validator_tests::ScyllaCluster;
+use vector_search_validator_tests::ScyllaProxyCluster;
 use vector_search_validator_tests::TestCase;
-use vector_search_validator_tests::VectorStoreClusterExt;
+use vector_search_validator_tests::Tls;
+use vector_search_validator_tests::VectorStoreCluster;
 
 #[derive(Parser)]
 #[clap(version)]
-struct Args {
+struct Args<T: clap::Args> {
     #[command(subcommand)]
-    command: Command,
+    command: Command<T>,
 }
 
 #[derive(Subcommand)]
-enum Command {
+enum Command<T: clap::Args> {
     /// Print the list of available tests and exit.
     List,
 
     /// Run the vector-search-validator tests.
     Run {
-        /// IP address for the DNS server to bind to. Must be a loopback address.
-        #[arg(short, long, default_value = "127.0.1.1", value_name = "IP")]
-        dns_ip: Ipv4Addr,
-
-        /// IP address for the base services to bind to. Must be a loopback address.
-        #[arg(short, long, default_value = "127.0.2.1", value_name = "IP")]
-        base_ip: Ipv4Addr,
-
-        /// Path to the ScyllaDB configuration file.
-        #[arg(short, long, default_value = "conf/scylla.yaml", value_name = "PATH")]
-        scylla_default_conf: PathBuf,
-
-        /// Path to the base tmp directory.
-        #[arg(short, long, default_value = "/tmp", value_name = "PATH")]
-        tmpdir: PathBuf,
-
-        /// Enable verbose logging for Scylla and vector-store.
-        #[arg(short, long, default_value = "false")]
-        verbose: bool,
-
-        /// Disable ansi colors in the log output.
-        #[arg(long, default_value = "false")]
-        disable_colors: bool,
-
-        /// Enable duplicating errors information into the stderr stream.
-        #[arg(long, default_value = "false")]
-        duplicate_errors: bool,
-
-        /// Path to the ScyllaDB executable.
-        #[arg(value_name = "PATH")]
-        scylla: PathBuf,
-
-        /// Path to the Vector Store executable.
-        #[arg(value_name = "PATH")]
-        vector_store: PathBuf,
+        #[clap(flatten)]
+        inner: T,
 
         /// Filters to select specific tests to run.
         /// The syntax is as follows:
@@ -118,15 +82,6 @@ async fn executable_exists(path: &Path) -> bool {
         return false;
     };
     metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0)
-}
-
-fn validate_different_subnet(dns_ip: Ipv4Addr, base_ip: Ipv4Addr) {
-    let dns_octets = dns_ip.octets();
-    let base_octets = base_ip.octets();
-    assert!(
-        dns_octets[1] != base_octets[1] || dns_octets[2] != base_octets[2],
-        "DNS server should serve addresses from a different subnet than its own"
-    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,7 +114,10 @@ impl<'a> FilterMatcher<'a> {
     }
 }
 
-fn fetch_matching_tests(filter: FilterMatcher<'_>, test_case: &TestCase) -> HashSet<String> {
+fn fetch_matching_tests<F>(filter: FilterMatcher<'_>, test_case: &TestCase<F>) -> HashSet<String>
+where
+    F: Clone + Send + Sync + 'static,
+{
     test_case
         .tests()
         .iter()
@@ -193,10 +151,13 @@ fn update_filter_map(
 /// Returns a HashMap where:
 /// - Key: test file name (e.g., "crud", "full_scan")
 /// - Value: HashSet of specific test names within that file (empty means run all tests in file)
-fn parse_test_filters(
+fn parse_test_filters<F>(
     filters: &[String],
-    test_cases: &[(String, TestCase)],
-) -> HashMap<String, HashSet<String>> {
+    test_cases: &[(String, TestCase<F>)],
+) -> HashMap<String, HashSet<String>>
+where
+    F: Clone + Send + Sync + 'static,
+{
     if filters.is_empty() {
         return HashMap::new(); // Run all tests
     }
@@ -244,62 +205,20 @@ fn parse_test_filters(
 }
 
 #[framed]
-pub fn run(register: impl AsyncFnOnce() -> Vec<(String, TestCase)>) -> Result<(), &'static str> {
+pub fn run<A, F>(
+    init: impl FnOnce(&A),
+    register: impl AsyncFnOnce() -> Vec<(String, TestCase<F>)>,
+    fixture: impl AsyncFnOnce(&A) -> F,
+) -> Result<(), &'static str>
+where
+    A: clap::Args,
+    F: Clone + Send + Sync + 'static,
+{
     let args = Args::parse();
 
-    let (ansi, rust_log) = match &args.command {
-        Command::Run {
-            disable_colors,
-            verbose,
-            ..
-        } => (
-            !disable_colors,
-            if *verbose {
-                "info"
-            } else {
-                "info,hickory_server=warn"
-            },
-        ),
-        _ => (true, "info,hickory_server=warn"),
-    };
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("install aws-lc-rs crypto provider");
-
-    tracing_subscriber::registry()
-        .with({
-            if let Command::Run {
-                duplicate_errors, ..
-            } = &args.command
-            {
-                duplicate_errors.then_some(
-                    fmt::layer()
-                        .with_writer(std::io::stderr)
-                        .with_target(false)
-                        .with_ansi(ansi)
-                        .with_filter(LevelFilter::ERROR)
-                        .with_filter(filter::filter_fn(|metadata| {
-                            metadata.target() == "vector_search_validator_tests"
-                                || metadata.target() == "vector_search_validator_engine"
-                        })),
-                )
-            } else {
-                None
-            }
-        })
-        .with(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(rust_log))
-                .expect("Failed to create EnvFilter"),
-        )
-        .with(
-            fmt::layer()
-                .with_target(false)
-                .with_ansi(ansi)
-                .with_writer(std::io::stdout),
-        )
-        .init();
-
+    if let Command::Run { inner, .. } = &args.command {
+        init(inner);
+    }
     panic::set_hook(Box::new(|info| {
         error!("{info}");
     }));
@@ -310,79 +229,32 @@ pub fn run(register: impl AsyncFnOnce() -> Vec<(String, TestCase)>) -> Result<()
         .unwrap()
         .block_on(frame!(async move {
             let test_cases = register().await;
-            if let Command::List = &args.command {
-                test_cases
-                    .into_iter()
-                    .flat_map(|(test_case_name, test_case)| {
-                        let tests: Vec<_> = test_case
-                            .tests()
-                            .iter()
-                            .map(move |(test_name, _, _)| test_name.clone())
-                            .collect();
-                        tests
-                            .into_iter()
-                            .map(move |test_name| (test_case_name.clone(), test_name))
-                    })
-                    .for_each(|(test_case_name, test_name)| {
-                        println!("{test_case_name}::{test_name}");
-                    });
-                return Ok(());
-            }
-
-            let Command::Run {
-                dns_ip,
-                base_ip,
-                scylla,
-                vector_store,
-                scylla_default_conf,
-                tmpdir,
-                verbose,
-                filters,
-                disable_colors,
-                ..
-            } = args.command
-            else {
-                unreachable!();
+            let (inner, filters) = match &args.command {
+                Command::Run { inner, filters } => (inner, filters),
+                Command::List => {
+                    test_cases
+                        .into_iter()
+                        .flat_map(|(test_case_name, test_case)| {
+                            let tests: Vec<_> = test_case
+                                .tests()
+                                .iter()
+                                .map(move |(test_name, _, _)| test_name.clone())
+                                .collect();
+                            tests
+                                .into_iter()
+                                .map(move |test_name| (test_case_name.clone(), test_name))
+                        })
+                        .for_each(|(test_case_name, test_name)| {
+                            println!("{test_case_name}::{test_name}");
+                        });
+                    return Ok(());
+                }
             };
 
-            validate_different_subnet(dns_ip, base_ip);
-
-            let services_subnet = Arc::new(ServicesSubnet::new(base_ip));
-            let tls = tls::new(
-                &vector_search_validator_tests::common::get_default_db_ips_for_subnet(
-                    &services_subnet,
-                ),
-            )
-            .await;
-            let dns = dns::new(dns_ip).await;
-            let firewall = firewall::new().await;
-            let db =
-                scylla_cluster::new(scylla, scylla_default_conf, tmpdir.clone(), verbose).await;
-            let vs = vector_store_cluster::new(vector_store, verbose, disable_colors, tmpdir).await;
-            let db_proxy = scylla_proxy_cluster::new().await;
-
-            info!(
-                "{} version: {}",
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION")
-            );
-            let version = db.version().await;
-            info!("scylla version: {}", version);
-            info!("dns version: {}", dns.version().await);
-            info!("vector-store version: {}", vs.version().await);
-
-            let filter_map = parse_test_filters(&filters, &test_cases);
+            let filter_map = parse_test_filters(filters, &test_cases);
 
             let report = vector_search_validator_tests::run(
-                TestActors {
-                    services_subnet,
-                    tls,
-                    dns,
-                    firewall,
-                    db,
-                    vs,
-                    db_proxy,
-                },
+                fixture(inner).await,
                 test_cases,
                 Arc::new(filter_map),
             )
@@ -414,11 +286,45 @@ pub fn run(register: impl AsyncFnOnce() -> Vec<(String, TestCase)>) -> Result<()
         }))
 }
 
+pub async fn new_dns(ip: Ipv4Addr) -> mpsc::Sender<Dns> {
+    dns::new(ip).await
+}
+
+pub async fn new_firewall() -> mpsc::Sender<Firewall> {
+    firewall::new().await
+}
+
+pub async fn new_scylla_cluster(
+    path: PathBuf,
+    default_conf: PathBuf,
+    tempdir: PathBuf,
+    verbose: bool,
+) -> mpsc::Sender<ScyllaCluster> {
+    scylla_cluster::new(path, default_conf, tempdir, verbose).await
+}
+
+pub async fn new_scylla_proxy_cluster() -> mpsc::Sender<ScyllaProxyCluster> {
+    scylla_proxy_cluster::new().await
+}
+
+pub async fn new_tls(ips: &[Ipv4Addr]) -> mpsc::Sender<Tls> {
+    tls::new(ips).await
+}
+
+pub async fn new_vector_store_cluster(
+    path: PathBuf,
+    verbose: bool,
+    disable_colors: bool,
+    tmpdir: PathBuf,
+) -> mpsc::Sender<VectorStoreCluster> {
+    vector_store_cluster::new(path, verbose, disable_colors, tmpdir).await
+}
+
 #[cfg(test)]
 pub(crate) mod validator_tests {
     use super::*;
 
-    fn make_dummy_test_cases(test_names: &[&str]) -> TestCase {
+    fn make_dummy_test_cases(test_names: &[&str]) -> TestCase<()> {
         let mut tc = TestCase::empty();
         for &name in test_names {
             tc = tc.with_test(
@@ -430,7 +336,7 @@ pub(crate) mod validator_tests {
         tc
     }
 
-    fn make_test_cases() -> Vec<(String, TestCase)> {
+    fn make_test_cases() -> Vec<(String, TestCase<()>)> {
         vec![
             (
                 "crud".to_string(),
@@ -447,7 +353,7 @@ pub(crate) mod validator_tests {
         ]
     }
 
-    fn make_overlapping_test_cases() -> Vec<(String, TestCase)> {
+    fn make_overlapping_test_cases() -> Vec<(String, TestCase<()>)> {
         vec![
             (
                 "crud".to_string(),

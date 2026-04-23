@@ -3,15 +3,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-use crate::DnsExt;
-use crate::ScyllaClusterExt;
-use crate::ScyllaNodeConfig;
-use crate::ScyllaProxyClusterExt;
-use crate::ScyllaProxyNodeConfig;
 use crate::TestActors;
-use crate::TlsExt;
-use crate::VectorStoreClusterExt;
-use crate::VectorStoreNodeConfig;
 use async_backtrace::framed;
 use httpclient::HttpClient;
 use itertools::Itertools;
@@ -30,6 +22,14 @@ use std::time::Duration;
 use tap::Pipe;
 use tokio::time;
 use tracing::info;
+use vector_search_validator_tests::DnsExt;
+use vector_search_validator_tests::ScyllaClusterExt;
+use vector_search_validator_tests::ScyllaNodeConfig;
+use vector_search_validator_tests::ScyllaProxyClusterExt;
+use vector_search_validator_tests::ScyllaProxyNodeConfig;
+use vector_search_validator_tests::TlsExt;
+use vector_search_validator_tests::VectorStoreClusterExt;
+use vector_search_validator_tests::VectorStoreNodeConfig;
 use vector_store::IndexInfo;
 use vector_store::IndexName;
 use vector_store::KeyspaceName;
@@ -109,7 +109,7 @@ pub async fn get_default_scylla_node_configs(actors: &TestActors) -> Vec<ScyllaN
                 db_ip: ip,
                 primary_vs_uris: vec![vs_urls.remove(i)],
                 secondary_vs_uris: vs_urls,
-                args: crate::default_scylla_args(),
+                args: vector_search_validator_tests::default_scylla_args(),
                 cert_path: Some(cert_path.clone()),
                 key_path: Some(key_path.clone()),
                 extra_config: None,

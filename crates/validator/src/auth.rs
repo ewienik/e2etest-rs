@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use crate::TestActors;
+use crate::common;
+use crate::common::*;
 use async_backtrace::framed;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 use uuid::Uuid;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::ScyllaClusterExt;
+use vector_search_validator_tests::TestCase;
+use vector_search_validator_tests::VectorStoreClusterExt;
 use vector_store::httproutes::IndexStatus;
 use vector_store::httproutes::NodeStatus;
 
@@ -37,7 +41,7 @@ fn scylla_auth_config() -> Vec<u8> {
 }
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_test(

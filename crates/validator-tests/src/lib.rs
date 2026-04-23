@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-pub mod common;
 mod dns;
 mod firewall;
 mod scylla_cluster;
@@ -39,7 +38,6 @@ use std::sync::RwLock;
 use std::time::Duration;
 pub use tls::Tls;
 pub use tls::TlsExt;
-use tokio::sync::mpsc;
 use tokio::time;
 use tracing::Instrument;
 use tracing::Span;
@@ -75,20 +73,9 @@ impl ServicesSubnet {
     }
 }
 
-#[derive(Clone)]
-pub struct TestActors {
-    pub services_subnet: Arc<ServicesSubnet>,
-    pub tls: mpsc::Sender<Tls>,
-    pub dns: mpsc::Sender<Dns>,
-    pub firewall: mpsc::Sender<Firewall>,
-    pub db: mpsc::Sender<ScyllaCluster>,
-    pub vs: mpsc::Sender<VectorStoreCluster>,
-    pub db_proxy: mpsc::Sender<ScyllaProxyCluster>,
-}
-
 type TestFuture = BoxFuture<'static, ()>;
 
-type TestFn = Box<dyn Fn(TestActors) -> TestFuture>;
+type TestFn<F> = Box<dyn Fn(F) -> TestFuture>;
 
 #[derive(Debug, Default)]
 pub struct RunReport {
@@ -166,13 +153,19 @@ impl Statistics {
 }
 
 /// Represents a single test case, which can include initialization, multiple tests, and cleanup.
-pub struct TestCase {
-    init: Option<(Duration, TestFn)>,
-    tests: Vec<(String, Duration, TestFn)>,
-    cleanup: Option<(Duration, TestFn)>,
+pub struct TestCase<F>
+where
+    F: Clone + Send + Sync + 'static,
+{
+    init: Option<(Duration, TestFn<F>)>,
+    tests: Vec<(String, Duration, TestFn<F>)>,
+    cleanup: Option<(Duration, TestFn<F>)>,
 }
 
-impl TestCase {
+impl<F> TestCase<F>
+where
+    F: Clone + Send + Sync + 'static,
+{
     /// Creates a new empty test case.
     pub fn empty() -> Self {
         Self {
@@ -183,14 +176,14 @@ impl TestCase {
     }
 
     /// Returns a reference to the tests in this test case.
-    pub fn tests(&self) -> &Vec<(String, Duration, TestFn)> {
+    pub fn tests(&self) -> &Vec<(String, Duration, TestFn<F>)> {
         &self.tests
     }
 
     /// Add an initialization function to the test case.
-    pub fn with_init<F, R>(mut self, timeout: Duration, test_fn: F) -> Self
+    pub fn with_init<TF, R>(mut self, timeout: Duration, test_fn: TF) -> Self
     where
-        F: Fn(TestActors) -> R + 'static,
+        TF: Fn(F) -> R + 'static,
         R: Future<Output = ()> + Send + 'static,
     {
         self.init = Some((timeout, wrap_test_fn(test_fn)));
@@ -198,9 +191,9 @@ impl TestCase {
     }
 
     /// Add a test to the test case.
-    pub fn with_test<F, R>(mut self, name: impl ToString, timeout: Duration, test_fn: F) -> Self
+    pub fn with_test<TF, R>(mut self, name: impl ToString, timeout: Duration, test_fn: TF) -> Self
     where
-        F: Fn(TestActors) -> R + 'static,
+        TF: Fn(F) -> R + 'static,
         R: Future<Output = ()> + Send + 'static,
     {
         self.tests
@@ -209,9 +202,9 @@ impl TestCase {
     }
 
     /// Add a cleanup function to the test case.
-    pub fn with_cleanup<F, R>(mut self, timeout: Duration, test_fn: F) -> Self
+    pub fn with_cleanup<TF, R>(mut self, timeout: Duration, test_fn: TF) -> Self
     where
-        F: Fn(TestActors) -> R + 'static,
+        TF: Fn(F) -> R + 'static,
         R: Future<Output = ()> + Send + 'static,
     {
         self.cleanup = Some((timeout, wrap_test_fn(test_fn)));
@@ -222,7 +215,7 @@ impl TestCase {
     /// Run initialization, all tests, and cleanup functions in the test case.
     async fn run(
         &self,
-        actors: TestActors,
+        fixture: F,
         test_case_name: &str,
         test_cases: &HashSet<String>,
         backtrace: Backtrace,
@@ -241,7 +234,7 @@ impl TestCase {
             if !run_single(
                 error_span!("init"),
                 *timeout,
-                init(actors.clone()),
+                init(fixture.clone()),
                 backtrace.clone(),
             )
             .await
@@ -257,7 +250,7 @@ impl TestCase {
                 future::ready(test_cases.is_empty() || test_cases.contains(name))
             })
             .then(|(name, timeout, test)| {
-                let actors = actors.clone();
+                let actors = fixture.clone();
                 let backtrace = backtrace.clone();
                 async move {
                     let ok =
@@ -282,7 +275,7 @@ impl TestCase {
             if !run_single(
                 error_span!("cleanup"),
                 *timeout,
-                cleanup(actors.clone()),
+                cleanup(fixture.clone()),
                 backtrace.clone(),
             )
             .await
@@ -299,13 +292,13 @@ impl TestCase {
 
 /// Wraps a test function into a `TestFn` type, which is a boxed future that can be stored in a
 /// container.
-fn wrap_test_fn<F, R>(test_fn: F) -> TestFn
+fn wrap_test_fn<TF, R, F>(test_fn: TF) -> TestFn<F>
 where
-    F: Fn(TestActors) -> R + 'static,
+    TF: Fn(F) -> R + 'static,
     R: Future<Output = ()> + Send + 'static,
 {
-    Box::new(move |actors: TestActors| {
-        let future = test_fn(actors);
+    Box::new(move |fixture: F| {
+        let future = test_fn(fixture);
         future.boxed()
     })
 }
@@ -338,11 +331,14 @@ async fn run_single(
 
 #[framed]
 /// Runs all test cases, filtering them based on the provided filter map.
-pub async fn run(
-    actors: TestActors,
-    test_cases: Vec<(String, TestCase)>,
+pub async fn run<F>(
+    fixture: F,
+    test_cases: Vec<(String, TestCase<F>)>,
     filter_map: Arc<HashMap<String, HashSet<String>>>,
-) -> RunReport {
+) -> RunReport
+where
+    F: Clone + Send + Sync + 'static,
+{
     let backtrace = setup_panic_hook();
 
     let stats = stream::iter(test_cases.into_iter())
@@ -351,14 +347,14 @@ pub async fn run(
             async move { process }
         })
         .then(|(name, test_case)| {
-            let actors = actors.clone();
+            let fixture = fixture.clone();
             let filter = filter_map.clone();
             let file_name = name.clone();
             let backtrace = backtrace.clone();
             async move {
                 let stats = test_case
                     .run(
-                        actors,
+                        fixture,
                         &file_name,
                         filter.get(&file_name).unwrap_or(&HashSet::new()),
                         backtrace,
@@ -423,28 +419,6 @@ fn clear_panic_hook() {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::net::Ipv4Addr;
-    use tokio::sync::mpsc;
-
-    fn dummy_test_actors() -> TestActors {
-        let services_subnet = Arc::new(ServicesSubnet::new(Ipv4Addr::new(127, 0, 2, 1)));
-        let (tls, _) = mpsc::channel(1);
-        let (dns, _) = mpsc::channel(1);
-        let (firewall, _) = mpsc::channel(1);
-        let (db, _) = mpsc::channel(1);
-        let (vs, _) = mpsc::channel(1);
-        let (db_proxy, _) = mpsc::channel(1);
-
-        TestActors {
-            services_subnet,
-            tls,
-            dns,
-            firewall,
-            db,
-            vs,
-            db_proxy,
-        }
-    }
 
     #[test]
     fn formats_failed_tests_as_bulleted_list() {
@@ -469,12 +443,7 @@ mod tests {
             });
 
         let stats = test_case
-            .run(
-                dummy_test_actors(),
-                "crud",
-                &HashSet::new(),
-                Backtrace::new(),
-            )
+            .run((), "crud", &HashSet::new(), Backtrace::new())
             .await;
 
         assert_eq!(stats.failed, 2);

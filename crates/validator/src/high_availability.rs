@@ -5,15 +5,19 @@
 
 use std::collections::HashMap;
 
+use crate::TestActors;
+use crate::common::*;
 use async_backtrace::framed;
 use scylla::statement::Statement;
 use tracing::info;
+use vector_search_validator_tests::ScyllaClusterExt;
 use vector_search_validator_tests::ScyllaNodeConfig;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::TestCase;
+use vector_search_validator_tests::TlsExt;
+use vector_search_validator_tests::VectorStoreNodeConfig;
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty().with_cleanup(timeout, cleanup).with_test(
         "secondary_uri_works_correctly",
@@ -36,7 +40,7 @@ async fn test_secondary_uri_works_correctly(actors: TestActors) {
             db_ip: actors.services_subnet.ip(DB_OCTET_1),
             primary_vs_uris: vec![vs_url.clone()],
             secondary_vs_uris: vec![],
-            args: default_scylla_args(),
+            args: vector_search_validator_tests::default_scylla_args(),
             cert_path: Some(cert_path.clone()),
             key_path: Some(key_path.clone()),
             extra_config: None,
@@ -45,7 +49,7 @@ async fn test_secondary_uri_works_correctly(actors: TestActors) {
             db_ip: actors.services_subnet.ip(DB_OCTET_2),
             primary_vs_uris: vec![],
             secondary_vs_uris: vec![vs_url.clone()],
-            args: default_scylla_args(),
+            args: vector_search_validator_tests::default_scylla_args(),
             cert_path: Some(cert_path.clone()),
             key_path: Some(key_path.clone()),
             extra_config: None,
@@ -54,7 +58,7 @@ async fn test_secondary_uri_works_correctly(actors: TestActors) {
             db_ip: actors.services_subnet.ip(DB_OCTET_3),
             primary_vs_uris: vec![],
             secondary_vs_uris: vec![vs_url.clone()],
-            args: default_scylla_args(),
+            args: vector_search_validator_tests::default_scylla_args(),
             cert_path: Some(cert_path.clone()),
             key_path: Some(key_path.clone()),
             extra_config: None,

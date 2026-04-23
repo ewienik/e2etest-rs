@@ -3,13 +3,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use crate::TestActors;
+use crate::common;
+use crate::common::*;
 use async_backtrace::framed;
 use httpclient::HttpClient;
 use scylla::client::session::Session;
 use std::collections::HashMap;
 use tracing::info;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::TestCase;
 use vector_store::IndexInfo;
 use vector_store::TableName;
 
@@ -64,7 +66,7 @@ async fn insert_vectors(session: &Session, table: &TableName, embeddings: &HashM
 }
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_init(timeout, init)

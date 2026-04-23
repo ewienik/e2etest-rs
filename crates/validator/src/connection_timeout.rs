@@ -3,17 +3,20 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use crate::TestActors;
+use crate::common::*;
 use async_backtrace::framed;
 use std::time::Duration;
 use tap::Pipe;
 use tracing::info;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::FirewallExt;
+use vector_search_validator_tests::TestCase;
+use vector_search_validator_tests::VectorStoreClusterExt;
 
 const CONNECTION_TIMEOUT: &str = "5s";
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_init(timeout, init_with_proxy_single_vs)
