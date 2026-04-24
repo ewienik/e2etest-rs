@@ -244,15 +244,7 @@ fn parse_test_filters(
 }
 
 #[framed]
-/// Returns a vector of all known test cases to be run. Each test case is registered with a name
-async fn register() -> Vec<(String, TestCase)> {
-    vector_search_validator_vector_store::test_cases()
-        .await
-        .collect()
-}
-
-#[framed]
-pub fn run() -> Result<(), &'static str> {
+pub fn run(register: impl AsyncFnOnce() -> Vec<(String, TestCase)>) -> Result<(), &'static str> {
     let args = Args::parse();
 
     let (ansi, rust_log) = match &args.command {
