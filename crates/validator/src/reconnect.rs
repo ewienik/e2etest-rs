@@ -6,6 +6,11 @@
 use crate::TestActors;
 use crate::common::*;
 use async_backtrace::framed;
+use e2etest::TestCase;
+use e2etest_firewall::FirewallExt;
+use e2etest_scylla_cluster::ScyllaClusterExt;
+use e2etest_scylla_proxy_cluster::ScyllaProxyClusterExt;
+use e2etest_vector_store_cluster::VectorStoreClusterExt;
 use scylla_proxy::Condition;
 use scylla_proxy::Reaction;
 use scylla_proxy::RequestReaction;
@@ -13,11 +18,6 @@ use scylla_proxy::RequestRule;
 use std::time::Duration;
 use tap::Pipe;
 use tracing::info;
-use vector_search_validator_tests::FirewallExt;
-use vector_search_validator_tests::ScyllaClusterExt;
-use vector_search_validator_tests::ScyllaProxyClusterExt;
-use vector_search_validator_tests::TestCase;
-use vector_search_validator_tests::VectorStoreClusterExt;
 use vector_store::httproutes::IndexStatus;
 
 const FRAME_DELAY: Duration = Duration::from_millis(100);

@@ -21,6 +21,16 @@ mod serde;
 mod similarity_functions;
 
 use async_backtrace::framed;
+use e2etest::TestCase;
+use e2etest_dns::Dns;
+use e2etest_dns::DnsExt;
+use e2etest_firewall::Firewall;
+use e2etest_scylla_cluster::ScyllaCluster;
+use e2etest_scylla_cluster::ScyllaClusterExt;
+use e2etest_scylla_proxy_cluster::ScyllaProxyCluster;
+use e2etest_tls::Tls;
+use e2etest_vector_store_cluster::VectorStoreCluster;
+use e2etest_vector_store_cluster::VectorStoreClusterExt;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,17 +41,6 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
-use vector_search_validator_tests::Dns;
-use vector_search_validator_tests::DnsExt;
-use vector_search_validator_tests::Firewall;
-use vector_search_validator_tests::ScyllaCluster;
-use vector_search_validator_tests::ScyllaClusterExt;
-use vector_search_validator_tests::ScyllaProxyCluster;
-use vector_search_validator_tests::ServicesSubnet;
-use vector_search_validator_tests::TestCase;
-use vector_search_validator_tests::Tls;
-use vector_search_validator_tests::VectorStoreCluster;
-use vector_search_validator_tests::VectorStoreClusterExt;
 
 #[derive(clap::Args)]
 struct Args {
@@ -102,8 +101,7 @@ fn init(args: &Args) {
                     .with_ansi(ansi)
                     .with_filter(LevelFilter::ERROR)
                     .with_filter(filter::filter_fn(|metadata| {
-                        metadata.target() == "vector_search_validator_tests"
-                            || metadata.target() == "vector_search_validator_engine"
+                        metadata.target().starts_with("e2etest")
                     })),
             ),
         )
@@ -140,27 +138,24 @@ async fn fixture(args: &Args) -> TestActors {
     validate_different_subnet(args.dns_ip, args.base_ip);
 
     let services_subnet = Arc::new(ServicesSubnet::new(args.base_ip));
-    let tls = vector_search_validator_engine::new_tls(&common::get_default_db_ips_for_subnet(
-        &services_subnet,
-    ))
-    .await;
-    let dns = vector_search_validator_engine::new_dns(args.dns_ip).await;
-    let firewall = vector_search_validator_engine::new_firewall().await;
-    let db = vector_search_validator_engine::new_scylla_cluster(
+    let tls = e2etest_tls::new(&common::get_default_db_ips_for_subnet(&services_subnet)).await;
+    let dns = e2etest_dns::new(args.dns_ip).await;
+    let firewall = e2etest_firewall::new().await;
+    let db = e2etest_scylla_cluster::new(
         args.scylla.clone(),
         args.scylla_default_conf.clone(),
         args.tmpdir.clone(),
         args.verbose,
     )
     .await;
-    let vs = vector_search_validator_engine::new_vector_store_cluster(
+    let vs = e2etest_vector_store_cluster::new(
         args.vector_store.clone(),
         args.verbose,
         args.disable_colors,
         args.tmpdir.clone(),
     )
     .await;
-    let db_proxy = vector_search_validator_engine::new_scylla_proxy_cluster().await;
+    let db_proxy = e2etest_scylla_proxy_cluster::new().await;
 
     info!(
         "{} version: {}",
@@ -184,7 +179,32 @@ async fn fixture(args: &Args) -> TestActors {
 }
 
 pub fn run() -> Result<(), &'static str> {
-    vector_search_validator_engine::run(init, register, fixture)
+    e2etest::run(init, register, fixture)
+}
+
+/// Represents a subnet for services, derived from a base IP address.
+pub struct ServicesSubnet([u8; 3]);
+
+impl ServicesSubnet {
+    pub fn new(ip: Ipv4Addr) -> Self {
+        assert!(
+            ip.is_loopback(),
+            "Base IP for services must be a loopback address"
+        );
+
+        let octets = ip.octets();
+        assert!(
+            octets[3] == 1,
+            "Base IP for services must have the last octet set to 1"
+        );
+
+        Self([octets[0], octets[1], octets[2]])
+    }
+
+    /// Returns an IP address in the subnet with the specified last octet.
+    pub fn ip(&self, octet: u8) -> Ipv4Addr {
+        [self.0[0], self.0[1], self.0[2], octet].into()
+    }
 }
 
 #[derive(Clone)]

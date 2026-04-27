@@ -3,95 +3,41 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-mod dns;
-mod firewall;
-mod scylla_cluster;
-mod scylla_proxy_cluster;
-mod tls;
-mod vector_store_cluster;
-
 use async_backtrace::frame;
 use async_backtrace::framed;
-pub use dns::Dns;
-pub use dns::DnsExt;
-pub use firewall::Firewall;
-pub use firewall::FirewallExt;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream;
 use futures::stream::StreamExt;
-pub use scylla_cluster::ScyllaCluster;
-pub use scylla_cluster::ScyllaClusterExt;
-pub use scylla_cluster::ScyllaNodeConfig;
-pub use scylla_cluster::default_scylla_args;
-pub use scylla_cluster::set_default_scylla_args;
-pub use scylla_proxy_cluster::ScyllaProxyCluster;
-pub use scylla_proxy_cluster::ScyllaProxyClusterExt;
-pub use scylla_proxy_cluster::ScyllaProxyNodeConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future;
-use std::net::Ipv4Addr;
 use std::panic;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
-pub use tls::Tls;
-pub use tls::TlsExt;
 use tokio::time;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::error;
 use tracing::error_span;
 use tracing::info;
-pub use vector_store_cluster::VectorStoreCluster;
-pub use vector_store_cluster::VectorStoreClusterExt;
-pub use vector_store_cluster::VectorStoreNodeConfig;
-
-/// Represents a subnet for services, derived from a base IP address.
-pub struct ServicesSubnet([u8; 3]);
-
-impl ServicesSubnet {
-    pub fn new(ip: Ipv4Addr) -> Self {
-        assert!(
-            ip.is_loopback(),
-            "Base IP for services must be a loopback address"
-        );
-
-        let octets = ip.octets();
-        assert!(
-            octets[3] == 1,
-            "Base IP for services must have the last octet set to 1"
-        );
-
-        Self([octets[0], octets[1], octets[2]])
-    }
-
-    /// Returns an IP address in the subnet with the specified last octet.
-    pub fn ip(&self, octet: u8) -> Ipv4Addr {
-        [self.0[0], self.0[1], self.0[2], octet].into()
-    }
-}
 
 type TestFuture = BoxFuture<'static, ()>;
 
 type TestFn<F> = Box<dyn Fn(F) -> TestFuture>;
 
 #[derive(Debug, Default)]
-pub struct RunReport {
+pub(crate) struct RunReport {
     failed_tests: Vec<String>,
 }
 
 impl RunReport {
-    pub fn failed_tests(&self) -> &[String] {
-        &self.failed_tests
-    }
-
-    pub fn failed_tests_summary(&self) -> Option<String> {
+    pub(crate) fn failed_tests_summary(&self) -> Option<String> {
         format_failed_tests(&self.failed_tests)
     }
 
-    pub fn is_success(&self) -> bool {
+    pub(crate) fn is_success(&self) -> bool {
         self.failed_tests.is_empty()
     }
 }
@@ -104,7 +50,7 @@ impl From<Statistics> for RunReport {
     }
 }
 
-pub fn format_failed_tests(failed_tests: &[String]) -> Option<String> {
+pub(crate) fn format_failed_tests(failed_tests: &[String]) -> Option<String> {
     if failed_tests.is_empty() {
         return None;
     }
@@ -331,7 +277,7 @@ async fn run_single(
 
 #[framed]
 /// Runs all test cases, filtering them based on the provided filter map.
-pub async fn run<F>(
+pub(crate) async fn run<F>(
     fixture: F,
     test_cases: Vec<(String, TestCase<F>)>,
     filter_map: Arc<HashMap<String, HashSet<String>>>,

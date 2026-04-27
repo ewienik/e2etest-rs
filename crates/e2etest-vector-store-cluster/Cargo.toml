@@ -1,0 +1,17 @@
+# Copyright 2026-present ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+[package]
+name = "e2etest-vector-store-cluster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-backtrace.workspace = true
+e2etest.workspace = true
+httpclient.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+vector-store.workspace = true

@@ -1,16 +1,14 @@
-# Copyright 2025-present ScyllaDB
+# Copyright 2026-present ScyllaDB
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 [package]
-name = "vector-search-validator-tests"
+name = "e2etest-scylla-proxy-cluster"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 async-backtrace.workspace = true
-futures.workspace = true
-rustls.workspace = true
 scylla-proxy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
