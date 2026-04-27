@@ -10,13 +10,17 @@ license.workspace = true
 [dependencies]
 async-backtrace.workspace = true
 bcrypt.workspace = true
+clap.workspace = true
 httpclient.workspace = true
+itertools.workspace = true
+rustls.workspace = true
 scylla.workspace = true
 scylla-proxy.workspace = true
 serde_json.workspace = true
 tap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
 vector-search-validator-tests.workspace = true
 vector-search-validator-engine.workspace = true

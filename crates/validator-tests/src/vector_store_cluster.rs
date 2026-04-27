@@ -10,6 +10,9 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+pub const VS_PORT: u16 = 6080;
+pub const DB_PORT: u16 = 9042;
+
 /// Configuration for a single Vector Store node in the test cluster.
 #[derive(Clone)]
 pub struct VectorStoreNodeConfig {
@@ -29,11 +32,11 @@ pub struct VectorStoreNodeConfig {
 
 impl VectorStoreNodeConfig {
     pub fn vs_addr(&self) -> SocketAddr {
-        (self.vs_ip, crate::common::VS_PORT).into()
+        (self.vs_ip, VS_PORT).into()
     }
 
     pub fn db_addr(&self) -> SocketAddr {
-        (self.db_ip, crate::common::DB_PORT).into()
+        (self.db_ip, DB_PORT).into()
     }
 }
 

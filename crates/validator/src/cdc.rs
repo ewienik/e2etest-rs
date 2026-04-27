@@ -3,17 +3,18 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+use crate::TestActors;
+use crate::common::*;
 use async_backtrace::framed;
 use std::time::Duration;
 use tracing::info;
-use vector_search_validator_tests::common::*;
-use vector_search_validator_tests::*;
+use vector_search_validator_tests::TestCase;
 
 const FINE_GRAINED_CDC_MAX_LATENCY: Duration = Duration::from_secs(2);
 const CDC_MAX_LATENCY: Duration = Duration::from_secs(60);
 
 #[framed]
-pub(crate) async fn new() -> TestCase {
+pub(crate) async fn new() -> TestCase<TestActors> {
     let timeout = DEFAULT_TEST_TIMEOUT;
     TestCase::empty()
         .with_init(timeout, init)
