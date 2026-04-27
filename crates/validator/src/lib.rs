@@ -101,8 +101,7 @@ fn init(args: &Args) {
                     .with_ansi(ansi)
                     .with_filter(LevelFilter::ERROR)
                     .with_filter(filter::filter_fn(|metadata| {
-                        metadata.target() == "vector_search_validator_tests"
-                            || metadata.target() == "vector_search_validator_engine"
+                        metadata.target().starts_with("e2etest")
                     })),
             ),
         )
