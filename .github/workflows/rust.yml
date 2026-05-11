@@ -1,0 +1,148 @@
+name: Rust
+
+on:
+  push:
+    branches:
+    - 'master'
+
+  pull_request:
+    branches:
+    - 'master'
+
+  merge_group:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUST_BACKTRACE: full
+
+jobs:
+  cargo-clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: clippy
+
+    - name: Print rustc version
+      run: rustc --version
+
+    - name: Print cargo-clippy version
+      run: cargo clippy --version
+
+    - name: Run cargo-clippy checks
+      run: cargo clippy --all-targets --workspace -- -Dwarnings
+
+  cargo-fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: rustfmt
+
+    - name: Print rustc version
+      run: rustc --version
+
+    - name: Print cargo-fmt version
+      run: cargo fmt --version
+
+    - name: Run cargo-fmt checks
+      run: cargo fmt --all --check
+
+  cargo-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Print rustc version
+      run: rustc --version
+
+    - name: Run cargo-test checks
+      run: cargo test --verbose --all-targets --workspace
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Setup cargo-deny
+      uses: taiki-e/install-action@cargo-deny
+
+    - name: Print cargo-deny version
+      run: cargo deny --version
+
+    - name: Run cargo-deny checks
+      run: cargo deny check
+
+  cargo-machete:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Setup cargo-machete
+      uses: taiki-e/install-action@cargo-machete
+
+    - name: Print cargo-machete version
+      run: cargo machete --version
+
+    - name: Run cargo-machete checks
+      run: cargo machete
+
+  rust-workflow-status:
+    needs: ["cargo-clippy", "cargo-fmt", "cargo-test", "cargo-deny", "cargo-machete"]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Check workflow status
+      run: |
+        return_code=0
+
+        if [[ "${{ needs.cargo-clippy.result }}" == "failure" ]]; then
+          echo "cargo-clippy job failed"
+          return_code=1
+        fi
+
+        if [[ "${{ needs.cargo-fmt.result }}" == "failure" ]]; then
+          echo "cargo-fmt job failed"
+          return_code=1
+        fi
+
+        if [[ "${{ needs.cargo-test.result }}" == "failure" ]]; then
+          echo "cargo-test job failed"
+          return_code=1
+        fi
+
+        if [[ "${{ needs.cargo-deny.result }}" == "failure" ]]; then
+          echo "cargo-deny job failed"
+          return_code=1
+        fi
+
+        if [[ "${{ needs.cargo-machete.result }}" == "failure" ]]; then
+          echo "cargo-machete job failed"
+          return_code=1
+        fi
+
+        if [[ $return_code -ne 0 ]]; then
+          exit $return_code
+        fi
+
+        echo "All jobs succeeded"
+
