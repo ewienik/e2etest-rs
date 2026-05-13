@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a ScyllaDB cluster manager for e2etest tests. It provides an actor with
+//! handler using `tokio::sync::mpsc::Sender` over `enum ScyllaCluster` message. It provides also a
+//! `trait ScyllaClusterExt` with helper methods to send messages to the actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use std::net::Ipv4Addr;
@@ -98,6 +102,7 @@ pub struct ScyllaNodeConfig {
     pub extra_config: Option<Vec<u8>>,
 }
 
+/// Messages for the ScyllaDB cluster manager actor.
 pub enum ScyllaCluster {
     Version {
         tx: oneshot::Sender<String>,
@@ -129,6 +134,8 @@ pub enum ScyllaCluster {
     },
 }
 
+/// Extension trait for `mpsc::Sender<ScyllaCluster>` to provide convenient async methods for
+/// interacting with the ScyllaDB cluster manager actor.
 pub trait ScyllaClusterExt {
     /// Returns the version of the ScyllaDB executable.
     fn version(&self) -> impl Future<Output = String>;
@@ -251,6 +258,7 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
     }
 }
 
+/// Creates a new ScyllaDB cluster manager actor and returns a sender to send messages to it.
 #[framed]
 pub async fn new(
     path: PathBuf,

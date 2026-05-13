@@ -4,6 +4,9 @@
 [package]
 name = "e2etest-firewall"
 version.workspace = true
+description = "Firewall for e2etest"
+repository = "https://github.com/scylladb/e2etest-rs"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 

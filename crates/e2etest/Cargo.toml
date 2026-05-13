@@ -4,6 +4,9 @@
 [package]
 name = "e2etest"
 version.workspace = true
+description = "E2E test framework for Rust"
+repository = "https://github.com/scylladb/e2etest-rs"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 

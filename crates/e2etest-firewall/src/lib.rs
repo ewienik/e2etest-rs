@@ -3,6 +3,12 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a Firewall emulator server for e2etest tests. It provides an actor with
+//! handler using `tokio::sync::mpsc::Sender` over `enum Firewall` message. It provides also a
+//! `trait FirewallExt` with helper methods to send messages to the actor. Currently, the Firewall
+//! actor adds and removes blackhole routes to block traffic to specified IP addresses. It uses
+//! `neli` crate to interact with the Linux kernel's netlink interface to manage routing rules.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use neli::consts::nl::*;
@@ -25,6 +31,7 @@ use tracing::error;
 use tracing::error_span;
 use tracing::info;
 
+/// Messages for the Firewall actor.
 pub enum Firewall {
     DropTraffic {
         ips: Vec<Ipv4Addr>,
@@ -35,6 +42,8 @@ pub enum Firewall {
     },
 }
 
+/// Extension trait for `mpsc::Sender<Firewall>` to provide helper methods to send messages to the
+/// Firewall actor.
 pub trait FirewallExt {
     /// Drops traffic to the specified IP addresses.
     fn drop_traffic(&self, ips: Vec<Ipv4Addr>) -> impl Future<Output = ()>;
@@ -64,6 +73,8 @@ impl FirewallExt for mpsc::Sender<Firewall> {
             .expect("FirewallExt::turn_off_rules: internal actor should send response")
     }
 }
+
+/// Creates a new Firewall actor and returns a sender to send messages to it.
 #[framed]
 pub async fn new() -> mpsc::Sender<Firewall> {
     let (tx, mut rx) = mpsc::channel(10);

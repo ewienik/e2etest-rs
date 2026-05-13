@@ -4,6 +4,9 @@
 [package]
 name = "e2etest-dns"
 version.workspace = true
+description = "DNS server for e2etest"
+repository = "https://github.com/scylladb/e2etest-rs"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 

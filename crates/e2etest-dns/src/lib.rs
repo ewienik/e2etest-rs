@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a DNS server for e2etest tests. It provides an actor with handler using
+//! `tokio::sync::mpsc::Sender` over `enum Dns` message. It provides also a `trait DnsExt` with
+//! helper methods to send messages to the actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use hickory_server::proto::rr::DNSClass;
@@ -29,6 +33,7 @@ use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
 
+/// Messages for the DNS actor.
 pub enum Dns {
     Version { tx: oneshot::Sender<String> },
     Domain { tx: oneshot::Sender<String> },
@@ -36,6 +41,8 @@ pub enum Dns {
     Upsert { name: String, ip: Ipv4Addr },
 }
 
+/// Extension trait for `mpsc::Sender<Dns>` to provide helper methods to send messages to the DNS
+/// actor.
 pub trait DnsExt {
     /// Returns the version of the DNS server.
     fn version(&self) -> impl Future<Output = String>;
