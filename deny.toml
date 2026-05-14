@@ -96,7 +96,6 @@ allow = [
     "Zlib",
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
-    "LicenseRef-ScyllaDB-Source-Available-1.0",
     "ISC",
     "OpenSSL",
     "CC0-1.0",
@@ -133,12 +132,6 @@ exceptions = [
 # Each entry is a crate relative path, and the (opaque) hash of its contents
 #{ path = "LICENSE", hash = 0xbd0eed23 }
 #]
-[[licenses.clarify]]
-crate = "vector-search-validator-scylla"
-expression = "LicenseRef-ScyllaDB-Source-Available-1.0"
-license-files = [
-    { path = "../../../../LICENSE-ScyllaDB-Source-Available.md", hash = 0x6bf4a064 }
-]
 
 [licenses.private]
 # If true, ignores workspace crates that aren't published, or are only
