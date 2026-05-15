@@ -59,6 +59,7 @@
 //! ```
 
 mod backtrace;
+mod fixture;
 mod statistics;
 mod testcase;
 
