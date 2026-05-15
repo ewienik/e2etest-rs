@@ -14,5 +14,6 @@ license.workspace = true
 async-backtrace.workspace = true
 clap.workspace = true
 futures.workspace = true
+itertools.workspace = true
 tokio.workspace = true
 tracing.workspace = true

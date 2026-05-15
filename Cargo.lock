@@ -486,6 +486,7 @@ dependencies = [
  "async-backtrace",
  "clap",
  "futures",
+ "itertools",
  "tokio",
  "tracing",
 ]

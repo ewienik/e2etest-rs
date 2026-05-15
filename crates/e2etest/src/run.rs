@@ -5,6 +5,7 @@
 
 use crate::DEFAULT_TIMEOUT;
 use crate::backtrace::Backtrace;
+use crate::filter::Filter;
 use crate::fixture::Fixtures;
 use crate::statistics::Statistics;
 use std::fmt::Debug;
@@ -15,6 +16,7 @@ pub struct RunContext {
     pub(crate) fixtures: Fixtures,
     pub(crate) statistics: Statistics,
     pub(crate) backtrace: Backtrace,
+    pub(crate) filter: Filter,
     pub(crate) default_timeout: Duration,
 }
 
@@ -24,6 +26,7 @@ impl RunContext {
             fixtures: Fixtures::new(),
             statistics: Statistics::new(),
             backtrace: Backtrace::new(),
+            filter: Filter::empty(),
             default_timeout: DEFAULT_TIMEOUT,
         }
     }
@@ -35,6 +38,11 @@ impl RunContext {
 
     pub(crate) fn with_backtrace(mut self, backtrace: Backtrace) -> Self {
         self.backtrace = backtrace;
+        self
+    }
+
+    pub(crate) fn with_filter(mut self, filter: Filter) -> Self {
+        self.filter = filter;
         self
     }
 

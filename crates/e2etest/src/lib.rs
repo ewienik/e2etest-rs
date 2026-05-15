@@ -59,7 +59,9 @@
 //! ```
 
 mod backtrace;
+mod filter;
 mod fixture;
+mod group;
 mod run;
 mod statistics;
 mod task;
