@@ -12,7 +12,7 @@ license.workspace = true
 
 [dependencies]
 async-backtrace.workspace = true
-clap.workspace = true
+e2etest-macros.workspace = true
 futures.workspace = true
 itertools.workspace = true
 tokio.workspace = true
