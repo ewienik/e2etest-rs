@@ -63,6 +63,7 @@ mod fixture;
 mod run;
 mod statistics;
 mod task;
+mod test;
 mod testcase;
 
 use async_backtrace::frame;
