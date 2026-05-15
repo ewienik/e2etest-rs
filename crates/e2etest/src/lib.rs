@@ -11,6 +11,7 @@ use clap::Parser;
 use clap::Subcommand;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::panic;
 use std::path::Path;
@@ -192,6 +193,7 @@ where
 
 #[framed]
 pub fn run<A, F>(
+    args: impl IntoIterator<Item = impl Into<OsString> + Clone>,
     init: impl FnOnce(&A),
     register: impl AsyncFnOnce() -> Vec<(String, TestCase<F>)>,
     fixture: impl AsyncFnOnce(&A) -> F,
@@ -200,7 +202,7 @@ where
     A: clap::Args,
     F: Clone + Send + Sync + 'static,
 {
-    let args = Args::parse();
+    let args = Args::parse_from(args);
 
     if let Command::Run { inner, .. } = &args.command {
         init(inner);
