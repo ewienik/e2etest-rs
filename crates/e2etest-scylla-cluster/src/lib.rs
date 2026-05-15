@@ -67,10 +67,11 @@ pub fn default_scylla_args() -> Vec<String> {
         .clone()
 }
 
-/// Sets the default ScyllaDB arguments used when starting a scylla instance. It changes
-/// the default arguments for all validator's tests. It is needed to be able to customize
-/// default arguments for all tests from scylladb.git repository without touching code
-/// in the vector-store.git.
+/// Sets the default ScyllaDB arguments used when starting a scylla instance.
+///
+/// It changes the default arguments for all scylla-cluster's tests. It is needed to be able to
+/// customize default arguments for all tests, when there is no possibility to setup them at the
+/// start of tests.
 pub fn set_default_scylla_args(args: Vec<String>) {
     *DEFAULT_SCYLLA_ARGS
         .write()

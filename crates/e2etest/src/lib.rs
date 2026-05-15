@@ -264,12 +264,12 @@ where
             report
                 .is_success()
                 .then_some(())
-                .ok_or("Some vector-search-validator tests failed")
+                .ok_or("Some e2e tests failed")
         }))
 }
 
 #[cfg(test)]
-pub(crate) mod validator_tests {
+mod tests {
     use super::*;
 
     fn make_dummy_test_cases(test_names: &[&str]) -> TestCase<()> {
