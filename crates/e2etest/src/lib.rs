@@ -58,6 +58,7 @@
 //! e2etest::run(["validator", "run"], init, register, fixture).unwrap();
 //! ```
 
+mod backtrace;
 mod testcase;
 
 use async_backtrace::frame;
