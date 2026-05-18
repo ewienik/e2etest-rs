@@ -59,6 +59,7 @@
 //! ```
 
 mod backtrace;
+mod statistics;
 mod testcase;
 
 use async_backtrace::frame;
