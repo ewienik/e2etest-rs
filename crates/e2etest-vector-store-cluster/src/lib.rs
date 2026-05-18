@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a Vector Store cluster manager for e2etest tests. It provides an actor with
+//! handler using `tokio::sync::mpsc::Sender` over `enum VectorStoreCluster` message. It provides
+//! also a `trait VectorStoreClusterExt` with helper methods to send messages to the actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use reqwest::Client;
@@ -27,7 +31,10 @@ use tracing::debug;
 use tracing::debug_span;
 use tracing::info;
 
+/// The default port for the Vector Store API.
 pub const VS_PORT: u16 = 6080;
+
+/// The default port for ScyllaDB CQL.
 pub const DB_PORT: u16 = 9042;
 
 #[derive(serde::Deserialize, PartialEq, Debug)]
@@ -90,6 +97,7 @@ impl VectorStoreNodeConfig {
     }
 }
 
+/// Messages for the Vector Store cluster manager actor.
 pub enum VectorStoreCluster {
     Version {
         tx: oneshot::Sender<String>,
@@ -112,6 +120,8 @@ pub enum VectorStoreCluster {
     },
 }
 
+/// Extension trait for `mpsc::Sender<VectorStoreCluster>` to provide convenient methods for
+/// sending messages to the Vector Store cluster manager actor.
 pub trait VectorStoreClusterExt {
     /// Returns the version of the vector-store binary.
     fn version(&self) -> impl Future<Output = String>;
@@ -198,6 +208,8 @@ impl VectorStoreClusterExt for mpsc::Sender<VectorStoreCluster> {
     }
 }
 
+/// Creates a new Vector Store cluster manager actor and returns a sender for sending messages to
+/// it.
 #[framed]
 pub async fn new(
     path: PathBuf,

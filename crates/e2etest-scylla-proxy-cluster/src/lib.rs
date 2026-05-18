@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a ScyllaDB Proxy cluster manager for e2etest tests. It provides an actor
+//! with handler using `tokio::sync::mpsc::Sender` over `enum ScyllaProxyCluster` message. It
+//! provides also a `trait ScyllaProxyClusterExt` with helper methods to send messages to the
+//! actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use scylla_proxy::Node;
@@ -23,11 +28,16 @@ use tracing::info;
 
 const DEFAULT_SCYLLA_CQL_PORT: u16 = 9042;
 
+/// Configuration for a single node in the ScyllaDB proxy cluster.
 pub struct ScyllaProxyNodeConfig {
+    /// The real address of the ScyllaDB node that the proxy will forward traffic to.
     pub real_addr: Ipv4Addr,
+
+    /// The proxy address that the proxy will listen on for incoming traffic.
     pub proxy_addr: Ipv4Addr,
 }
 
+/// Messages for managing the ScyllaDB proxy cluster.
 pub enum ScyllaProxyCluster {
     Start {
         node_configs: Vec<ScyllaProxyNodeConfig>,
@@ -49,6 +59,8 @@ pub enum ScyllaProxyCluster {
     },
 }
 
+/// Extension trait for `mpsc::Sender<ScyllaProxyCluster>` to provide helper methods for managing
+/// the ScyllaDB proxy cluster.
 pub trait ScyllaProxyClusterExt {
     /// Starts the ScyllaDB proxy cluster with the given node configurations.
     fn start(
@@ -125,6 +137,8 @@ impl ScyllaProxyClusterExt for mpsc::Sender<ScyllaProxyCluster> {
             .expect("ScyllaProxyClusterExt::turn_off_rules: internal actor should send response")
     }
 }
+
+/// Creates a new ScyllaDB proxy cluster manager and starts the internal actor to handle messages.
 #[framed]
 pub async fn new() -> mpsc::Sender<ScyllaProxyCluster> {
     let (tx, mut rx) = mpsc::channel(10);

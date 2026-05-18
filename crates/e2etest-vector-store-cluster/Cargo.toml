@@ -3,7 +3,10 @@
 
 [package]
 name = "e2etest-vector-store-cluster"
-version.workspace = true
+version = "0.1.0"
+description = "Vector Store cluster manager for e2etest"
+repository = "https://github.com/scylladb/e2etest-rs"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 

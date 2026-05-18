@@ -3,6 +3,61 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This library provides a framework for defining and running End-to-End tests on network service
+//! for Rust. It allows users to define test cases with multiple tests, and provides a global
+//! fixture for all of them.
+//!
+//! ## Usage
+//!
+//! See this simple example:
+//!
+//! ```rust
+//! # use e2etest::TestCase;
+//! # use std::net::Ipv4Addr;
+//! # use std::time::Duration;
+//!
+//! #[derive(clap::Args)]
+//! struct Args {
+//!     #[arg(short, long, default_value = "127.0.100.1")]
+//!     dns_ip: Ipv4Addr,
+//! }
+//!
+//! fn init(args: &Args) {
+//! }
+//!
+//! #[derive(Clone)]
+//! struct Fixture {
+//!     dns_ip: Ipv4Addr,
+//! }
+//!
+//! async fn fixture(args: &Args) -> Fixture {
+//!     Fixture {
+//!         dns_ip: args.dns_ip,
+//!     }
+//! }
+//!
+//! async fn init_testcase(fixture: Fixture) {
+//! }
+//!
+//! async fn cleanup_testcase(fixture: Fixture) {
+//! }
+//!
+//! async fn test_dns_ip(fixture: Fixture) {
+//!     assert_eq!(fixture.dns_ip, Ipv4Addr::new(127, 0, 100, 1));
+//! }
+//!
+//! async fn register() -> Vec<(String, TestCase<Fixture>)> {
+//!     let timeout = Duration::from_secs(10);
+//!     let testcase = TestCase::empty()
+//!         .with_init(timeout, init_testcase)
+//!         .with_cleanup(timeout, cleanup_testcase)
+//!         .with_test("dns_ip", timeout, test_dns_ip);
+//!     vec![("simple".to_string(), testcase)]
+//! }
+//!
+//! e2etest::run(["validator", "run"], init, register, fixture).unwrap();
+//! ```
+
 mod testcase;
 
 use async_backtrace::frame;
@@ -11,6 +66,7 @@ use clap::Parser;
 use clap::Subcommand;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::panic;
 use std::path::Path;
@@ -37,7 +93,7 @@ enum Command<T: clap::Args> {
     /// Print the list of available tests and exit.
     List,
 
-    /// Run the vector-search-validator tests.
+    /// Run the E2E tests.
     Run {
         #[clap(flatten)]
         inner: T,
@@ -54,6 +110,7 @@ enum Command<T: clap::Args> {
     },
 }
 
+/// Checks if the file exists.
 #[framed]
 pub async fn file_exists(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path).await else {
@@ -62,6 +119,7 @@ pub async fn file_exists(path: &Path) -> bool {
     metadata.is_file()
 }
 
+/// Checks if the file exists and is executable.
 #[framed]
 pub async fn executable_exists(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path).await else {
@@ -190,8 +248,13 @@ where
     filter_map
 }
 
+/// Main entry point for running tests.
+///
+/// It takes command line arguments, an initialization function,
+/// a test registration function, and a fixture creation function.
 #[framed]
 pub fn run<A, F>(
+    args: impl IntoIterator<Item = impl Into<OsString> + Clone>,
     init: impl FnOnce(&A),
     register: impl AsyncFnOnce() -> Vec<(String, TestCase<F>)>,
     fixture: impl AsyncFnOnce(&A) -> F,
@@ -200,7 +263,7 @@ where
     A: clap::Args,
     F: Clone + Send + Sync + 'static,
 {
-    let args = Args::parse();
+    let args = Args::parse_from(args);
 
     if let Command::Run { inner, .. } = &args.command {
         init(inner);
@@ -264,12 +327,12 @@ where
             report
                 .is_success()
                 .then_some(())
-                .ok_or("Some vector-search-validator tests failed")
+                .ok_or("Some e2e tests failed")
         }))
 }
 
 #[cfg(test)]
-pub(crate) mod validator_tests {
+mod tests {
     use super::*;
 
     fn make_dummy_test_cases(test_names: &[&str]) -> TestCase<()> {

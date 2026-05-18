@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a ScyllaDB cluster manager for e2etest tests. It provides an actor with
+//! handler using `tokio::sync::mpsc::Sender` over `enum ScyllaCluster` message. It provides also a
+//! `trait ScyllaClusterExt` with helper methods to send messages to the actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use std::net::Ipv4Addr;
@@ -67,10 +71,11 @@ pub fn default_scylla_args() -> Vec<String> {
         .clone()
 }
 
-/// Sets the default ScyllaDB arguments used when starting a scylla instance. It changes
-/// the default arguments for all validator's tests. It is needed to be able to customize
-/// default arguments for all tests from scylladb.git repository without touching code
-/// in the vector-store.git.
+/// Sets the default ScyllaDB arguments used when starting a scylla instance.
+///
+/// It changes the default arguments for all scylla-cluster's tests. It is needed to be able to
+/// customize default arguments for all tests, when there is no possibility to setup them at the
+/// start of tests.
 pub fn set_default_scylla_args(args: Vec<String>) {
     *DEFAULT_SCYLLA_ARGS
         .write()
@@ -97,6 +102,7 @@ pub struct ScyllaNodeConfig {
     pub extra_config: Option<Vec<u8>>,
 }
 
+/// Messages for the ScyllaDB cluster manager actor.
 pub enum ScyllaCluster {
     Version {
         tx: oneshot::Sender<String>,
@@ -128,6 +134,8 @@ pub enum ScyllaCluster {
     },
 }
 
+/// Extension trait for `mpsc::Sender<ScyllaCluster>` to provide convenient async methods for
+/// interacting with the ScyllaDB cluster manager actor.
 pub trait ScyllaClusterExt {
     /// Returns the version of the ScyllaDB executable.
     fn version(&self) -> impl Future<Output = String>;
@@ -250,6 +258,7 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
     }
 }
 
+/// Creates a new ScyllaDB cluster manager actor and returns a sender to send messages to it.
 #[framed]
 pub async fn new(
     path: PathBuf,

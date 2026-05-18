@@ -72,6 +72,20 @@ jobs:
     - name: Run cargo-test checks
       run: cargo test --verbose --all-targets --workspace
 
+  cargo-test-doc:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Print rustc version
+      run: rustc --version
+
+    - name: Run cargo-test-doc checks
+      run: cargo test --verbose --doc --workspace
+
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +141,11 @@ jobs:
 
         if [[ "${{ needs.cargo-test.result }}" == "failure" ]]; then
           echo "cargo-test job failed"
+          return_code=1
+        fi
+
+        if [[ "${{ needs.cargo-test-doc.result }}" == "failure" ]]; then
+          echo "cargo-test-doc job failed"
           return_code=1
         fi
 

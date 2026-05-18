@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+//! This crate provides a Tls actor for e2etest tests to manage handling TLS certificates. It
+//! provides an actor with handler using `tokio::sync::mpsc::Sender` over `enum Tls` message. It
+//! provides also a `trait TlsExt` with helper methods to send messages to the actor.
+
 use async_backtrace::frame;
 use async_backtrace::framed;
 use rcgen::CertifiedKey;
@@ -22,6 +26,7 @@ use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
 
+/// Messages for the Tls actor.
 pub enum Tls {
     /// Returns the filesystem path to the certificate file.
     CertPath { tx: oneshot::Sender<PathBuf> },
@@ -33,6 +38,8 @@ pub enum Tls {
     },
 }
 
+/// Extension trait for `mpsc::Sender<Tls>` to provide helper methods for sending messages to the
+/// Tls actor.
 pub trait TlsExt {
     /// Returns the filesystem path to the certificate file.
     fn cert_path(&self) -> impl Future<Output = PathBuf>;
@@ -75,6 +82,7 @@ impl TlsExt for mpsc::Sender<Tls> {
             .expect("TlsExt::client_tls_config: internal actor should send response")
     }
 }
+
 /// Generates self-signed TLS certificates for the given IPs and starts
 /// the TLS actor that serves certificate paths and TLS contexts.
 pub async fn new(ips: &[Ipv4Addr]) -> mpsc::Sender<Tls> {
