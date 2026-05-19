@@ -60,6 +60,7 @@
 
 mod backtrace;
 mod fixture;
+mod run;
 mod statistics;
 mod testcase;
 
@@ -80,6 +81,8 @@ use tokio::task;
 use tokio::time;
 use tracing::error;
 use tracing::info;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Parser)]
 #[clap(version)]
