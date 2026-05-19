@@ -4,12 +4,21 @@
  */
 
 use crate::DEFAULT_TIMEOUT;
+use crate::backtrace;
 use crate::backtrace::Backtrace;
 use crate::filter::Filter;
 use crate::fixture::Fixtures;
+use crate::group::RunGroup;
 use crate::statistics::Statistics;
+use async_backtrace::framed;
+use itertools::Itertools;
 use std::fmt::Debug;
+use std::iter;
 use std::time::Duration;
+use tracing::Instrument;
+use tracing::error;
+use tracing::error_span;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct RunContext {
@@ -56,4 +65,49 @@ impl Debug for RunContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Run").finish()
     }
+}
+
+#[framed]
+/// Runs all test cases, filtering them based on the provided filter map.
+pub(crate) async fn run(
+    fixtures: Fixtures,
+    group: Box<dyn RunGroup>,
+    filter: Filter,
+    default_timeout: Duration,
+) -> Statistics {
+    let ctx = RunContext::new()
+        .with_fixtures(fixtures)
+        .with_filter(filter)
+        .with_backtrace(backtrace::setup_panic_hook())
+        .with_default_timeout(default_timeout);
+
+    ctx.statistics.increment_total(group.test_names().len());
+    ctx.statistics.increment_filtered(
+        group
+            .test_names()
+            .iter()
+            .map(|name| name.split("::").collect_vec())
+            .filter(|parts| {
+                ctx.filter.consider_test(
+                    iter::once(&group.name()).chain(&parts[..parts.len() - 1]),
+                    parts.last().unwrap_or(&""),
+                )
+            })
+            .count(),
+    );
+
+    group
+        .run_group(vec![], ctx.clone())
+        .instrument(error_span!("group", "{}", group.name()))
+        .await;
+
+    backtrace::clear_panic_hook();
+
+    let stats = ctx.statistics;
+    if stats.is_success() {
+        info!("test run ok: {stats:?}");
+    } else {
+        error!("test run failed: {stats:?}");
+    }
+    stats
 }
