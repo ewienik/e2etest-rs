@@ -62,6 +62,7 @@ mod backtrace;
 mod fixture;
 mod run;
 mod statistics;
+mod task;
 mod testcase;
 
 use async_backtrace::frame;
@@ -77,7 +78,6 @@ use std::time::Duration;
 pub use testcase::TestCase;
 use tokio::runtime::Builder;
 use tokio::runtime::Handle;
-use tokio::task;
 use tokio::time;
 use tracing::error;
 use tracing::info;
@@ -294,7 +294,7 @@ where
             const FINISH_TASKS_TIMEOUT: Duration = Duration::from_secs(10);
             if time::timeout(FINISH_TASKS_TIMEOUT, async {
                 while Handle::current().metrics().num_alive_tasks() > 0 {
-                    task::yield_now().await;
+                    tokio::task::yield_now().await;
                 }
             })
             .await
