@@ -400,6 +400,7 @@ dependencies = [
  "e2etest-macros",
  "futures",
  "itertools",
+ "linkme",
  "tokio",
  "tracing",
 ]
