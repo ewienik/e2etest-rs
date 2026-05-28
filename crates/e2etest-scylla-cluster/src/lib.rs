@@ -11,6 +11,7 @@ use async_backtrace::frame;
 use async_backtrace::framed;
 use std::net::Ipv4Addr;
 use std::os::unix;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -269,11 +270,11 @@ pub async fn new(
     let (tx, mut rx) = mpsc::channel(10);
 
     assert!(
-        e2etest::executable_exists(&path).await,
+        executable_exists(&path).await,
         "scylla executable '{path:?}' does not exist"
     );
     assert!(
-        e2etest::file_exists(&default_conf).await,
+        file_exists(&default_conf).await,
         "scylla config '{default_conf:?}' does not exist"
     );
 
@@ -740,4 +741,22 @@ fn get_scylla_user() -> Option<(Uid, Gid)> {
         .iter()
         .find(|u| u.name() == "scylla")
         .map(|user| (user.id().clone(), user.group_id()))
+}
+
+/// Checks if the file exists and is executable.
+#[framed]
+async fn executable_exists(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// Checks if the file exists.
+#[framed]
+async fn file_exists(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    metadata.is_file()
 }

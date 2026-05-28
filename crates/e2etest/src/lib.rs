@@ -67,13 +67,10 @@ use clap::Subcommand;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 use std::panic;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 pub use testcase::TestCase;
-use tokio::fs;
 use tokio::runtime::Builder;
 use tokio::runtime::Handle;
 use tokio::task;
@@ -108,24 +105,6 @@ enum Command<T: clap::Args> {
         #[arg(value_name = "FILTER")]
         filters: Vec<String>,
     },
-}
-
-/// Checks if the file exists.
-#[framed]
-pub async fn file_exists(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path).await else {
-        return false;
-    };
-    metadata.is_file()
-}
-
-/// Checks if the file exists and is executable.
-#[framed]
-pub async fn executable_exists(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path).await else {
-        return false;
-    };
-    metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -13,12 +13,15 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use tempfile::tempdir_in;
+use tokio::fs;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Child;
@@ -220,7 +223,7 @@ pub async fn new(
     let (tx, mut rx) = mpsc::channel(10);
 
     assert!(
-        e2etest::executable_exists(&path).await,
+        executable_exists(&path).await,
         "vector-store executable '{path:?}' does not exist"
     );
 
@@ -500,4 +503,13 @@ async fn wait_for_ready(state: &State) -> bool {
     }
 
     true
+}
+
+/// Checks if the file exists and is executable.
+#[framed]
+async fn executable_exists(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0)
 }
