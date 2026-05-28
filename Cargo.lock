@@ -516,7 +516,6 @@ name = "e2etest-scylla-cluster"
 version = "0.1.0"
 dependencies = [
  "async-backtrace",
- "e2etest",
  "sysinfo",
  "tap",
  "tempfile",
@@ -553,7 +552,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-backtrace",
- "e2etest",
  "reqwest",
  "serde",
  "tempfile",

@@ -14,7 +14,6 @@ license = "MIT OR Apache-2.0"
 anyhow = "1.0.97"
 async-backtrace = "0.2.7"
 clap = { version = "4.5.40", features = ["derive"] }
-e2etest = { path = "crates/e2etest", version = "0.1.0" }
 futures = "0.3.31"
 hickory-server = "0.26.1"
 neli = { version = "0.7.4", default-features = false, features = ["async"] }
