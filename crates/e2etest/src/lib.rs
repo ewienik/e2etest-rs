@@ -134,6 +134,7 @@ pub use crate::statistics::Statistics;
 pub use crate::test::RunTest;
 pub use crate::test::Test;
 pub use crate::unshare::UnshareInfo;
+pub use crate::unshare::register_apparmor_profile;
 pub use crate::unshare::unshare_info;
 #[doc(hidden)]
 pub use async_backtrace as __async_backtrace;
