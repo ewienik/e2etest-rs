@@ -7,6 +7,52 @@
 //! for Rust. It allows users to define test cases with multiple tests, and provides a global
 //! fixture for all of them.
 //!
+//! ## Basic Concepts
+//!
+//! The library divides running tests into two phases: the first phase called by `run()` divides
+//! the tests into groups and standalone tests, and spawns a separate process for each group or
+//! standalone test in a separate process with newly created namespace. The second phase called by
+//! `run_in_unshare()` runs the tests restricted by the first phase in the unshare environment, and
+//! transmits the statistics back to the parent process. The binary which uses this library should
+//! call `run()` or `run_in_unshare()` in the main function as fast as possible (it can call
+//! them after parsing command line arguments to prepare the configuration). By using
+//! `unshare_info()` the binary can detect the phase of execution. Binary should be aware that
+//! it will be spawned, by the first phase, with the same arguments.
+//!
+//! If the binary doesn't want to use unshare, it can call `run_without_unshare()` instead of
+//! `run()` - this will run all tests and groups in the same process without unshare namespaces.
+//!
+//! ## Unshare security setup
+//!
+//! The library creates these linux namespaces for child processes: user, network, mount, UTS.
+//! The crate remaps the user id and group id of the current user to the root user in the new user
+//! namespace. The crate creates a new network namespace and sets up a loopback interface. The
+//! crate sets up a new hostname in the new UTS namespace.
+//!
+//! Some distributions (e.g. Ubuntu) have AppArmor enabled by default, which prevents unshare from
+//! working. To allow unshare to work, either register an AppArmor profile or disable AppArmor for
+//! restrictions on user namespace creation.
+//!
+//! Disabling AppArmor restrictions can be done by running the following command:
+//! ```bash
+//! sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+//! ```
+//!
+//! Registering AppArmor profile can be done by running the following command:
+//! ```bash
+//! cat <<'EOF' | sudo apparmor_parser -r
+//! abi <abi/4.0>,
+//! include <tunables/global>
+//!
+//! profile validator-bin /path/to/validator-bin flags=(unconfined) {
+//!   userns,
+//! }
+//! EOF
+//! ```
+//!
+//! The crate provides a helper function `register_apparmor_profile()` which can provide the
+//! AppArmor profile for the current binary.
+//!
 //! ## Usage
 //!
 //! See this simple example:
@@ -136,6 +182,7 @@ pub use crate::statistics::Statistics;
 pub use crate::test::RunTest;
 pub use crate::test::Test;
 pub use crate::unshare::UnshareInfo;
+pub use crate::unshare::register_apparmor_profile;
 pub use crate::unshare::unshare_info;
 #[doc(hidden)]
 pub use async_backtrace as __async_backtrace;

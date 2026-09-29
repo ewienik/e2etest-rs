@@ -14,8 +14,8 @@ callback for test cases registration. The user needs to create a binary crate -
 The user can use the actors provided by `e2etest-rs` sub-crates, or create
 their own actors. Most likely, the user wants to run dns server, firewall and
 other testing actors - so the provided binary ought to be run in the unshared
-environment.  In the future `e2etest` will provide the unshared environment
-directly, without additional setup.
+environment.  `e2etest` provides the unshared environment directly, but on
+specific distributions there must be need some setup to allow unshare to work.
 
 The macros provided by `e2etest` don't require any additional dependencies in
 your `Cargo.toml` file. However, `e2etest` uses internally `async-backtrace`
@@ -126,53 +126,29 @@ assert_eq!(stats.tests_passed(), 2);
 assert_eq!(stats.tests_skipped(), 1);
 ```
 
-**Sample code for script to run in the unshared environment:**
+**Additional setup for Ubuntu**
+
+In Ubuntu the user needs to register apparmor profile for the binary with tests
+to allow unshare to work or disable apparmor for restrictions on user namespace
+creation, or run the tests with sudo.
+
+The following command disables apparmor for user namespace creation:
 
 ```bash
-#!/bin/bash
-
-set -e
-
-base_ip=127.0.1
-dns_ip=127.0.1.1
-
-tmp_resolv_conf=$(mktemp /tmp/resolv.conf.XXXXXX)
-echo "nameserver $dns_ip" > $tmp_resolv_conf
-
-sudo unshare -n -m /bin/bash <<EOF
-mount --bind $tmp_resolv_conf /etc/resolv.conf
-ip link set lo up
-ip addr add $dns_ip/32 dev lo
-for i in {1..10}; do
-    ip addr add $base_ip.\$i/32 dev lo
-done
-cat /etc/resolv.conf
-$e2e_validator run --dns-ip $dns_ip --base-ip $args
-EOF
-
-rm $tmp_resolv_conf
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
-**Sample code for running tests in a docker container:**
+The following command registers the sample apparmor profile:
 
 ```bash
-#!/bin/bash
+cat <<'EOF' | sudo apparmor_parser -r
+abi <abi/4.0>,
+include <tunables/global>
 
-set -e
-
-dns_ip=127.0.1.1
-
-docker run --rm \
-    --cap-add NET_ADMIN \
-    --user root \
-    --security-opt seccomp=unconfined \
-    --dns=$dns_ip \
-    --dns-search=. \
-    --volume="$e2e_validator:/e2e-validator" \
-    --network=none \
-    --entrypoint=/e2e-validator \
-    $docker_image \
-    run --dns-ip $dns_ip $args "$@"
+profile validator-bin /path/to/validator-bin flags=(unconfined) {
+  userns,
+}
+EOF
 ```
 
 ## License
