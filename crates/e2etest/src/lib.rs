@@ -86,21 +86,31 @@
 //!
 //! }
 //!
-//! tokio::runtime::Runtime::new().unwrap().block_on(async move {
-//!     use std::net::Ipv4Addr;
-//!     use std::time::Duration;
+//! use std::net::Ipv4Addr;
+//! use std::time::Duration;
 //!
-//!     let config = e2etest::Config::default()
-//!         .with_permanent_fixture(sample::FixtureCfg { dns_ip: Ipv4Addr::new(127, 0, 100, 1) })
-//!         .with_default_timeout(Duration::from_secs(10));
-//!     let stats = e2etest::run(config).await;
-//!     assert!(stats.is_success());
-//!     assert_eq!(stats.tests_defined(), 3);
-//!     assert_eq!(stats.tests_included(), 3);
-//!     assert_eq!(stats.tests_launched(), 2);
-//!     assert_eq!(stats.tests_passed(), 2);
-//!     assert_eq!(stats.tests_skipped(), 1);
-//! });
+//! tracing_subscriber::fmt::init();
+//!
+//! if let Some(unshare_info) = e2etest::unshare_info() {
+//!     let config = e2etest::ConfigUnshare::new(unshare_info)
+//!             .with_permanent_fixture(sample::FixtureCfg { dns_ip: Ipv4Addr::new(127, 0, 100, 1) })
+//!             .with_default_timeout(Duration::from_secs(10))
+//!             .with_concurrency(10);
+//!     e2etest::run_in_unshare(config);
+//!     return;
+//! }
+//!
+//! let config = e2etest::Config::default()
+//!     .with_concurrency(10);
+//!
+//! let stats = e2etest::run(config);
+//!
+//! assert!(stats.is_success());
+//! assert_eq!(stats.tests_defined(), 3);
+//! assert_eq!(stats.tests_included(), 3);
+//! assert_eq!(stats.tests_launched(), 2);
+//! assert_eq!(stats.tests_passed(), 2);
+//! assert_eq!(stats.tests_skipped(), 1);
 //! ```
 
 mod backtrace;
@@ -111,6 +121,7 @@ mod run;
 mod statistics;
 mod task;
 mod test;
+mod unshare;
 
 use crate::filter::Filter;
 pub use crate::fixture::Fixture;
@@ -122,20 +133,29 @@ pub use crate::group::RunGroup;
 pub use crate::statistics::Statistics;
 pub use crate::test::RunTest;
 pub use crate::test::Test;
+pub use crate::unshare::UnshareInfo;
+pub use crate::unshare::unshare_info;
 #[doc(hidden)]
 pub use async_backtrace as __async_backtrace;
 use async_backtrace::framed;
 pub use e2etest_macros::group;
 pub use e2etest_macros::test;
+use ipc_channel::ipc::IpcOneShotServer;
+use ipc_channel::ipc::IpcSender;
 #[doc(hidden)]
 pub use linkme as __linkme;
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::panic;
+use std::process::Child;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::thread;
 use std::time::Duration;
+use tokio::runtime::Builder;
 use tracing::error;
+use tracing::info;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -147,33 +167,55 @@ pub static E2ETEST_GROUPS: [fn() -> Box<dyn RunGroup>];
 
 /// Configuration for running tests.
 pub struct Config {
-    permanent_fixtures: Vec<Arc<dyn Any + Send + Sync>>,
     filters: Vec<String>,
-    default_timeout: Duration,
     concurrency: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            permanent_fixtures: Vec::new(),
             filters: Vec::new(),
-            default_timeout: DEFAULT_TIMEOUT,
             concurrency: 1,
         }
     }
 }
 
 impl Config {
-    /// Add a permanent fixture that will be available for all tests.
-    pub fn with_permanent_fixture(mut self, fixture: impl Any + Send + Sync) -> Self {
-        self.permanent_fixtures.push(Arc::new(fixture));
-        self
-    }
-
     /// Add a filter to select which tests to run.
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filters.push(filter.into());
+        self
+    }
+
+    /// Set the maximum number of namespaces to run concurrently.
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
+}
+
+/// Configuration for running tests.
+pub struct ConfigUnshare {
+    permanent_fixtures: Vec<Arc<dyn Any + Send + Sync>>,
+    info: UnshareInfo,
+    default_timeout: Duration,
+    concurrency: usize,
+}
+
+impl ConfigUnshare {
+    /// Create a new `ConfigUnshare` with the given `UnshareInfo`.
+    pub fn new(info: UnshareInfo) -> Self {
+        Self {
+            permanent_fixtures: Vec::new(),
+            info,
+            default_timeout: DEFAULT_TIMEOUT,
+            concurrency: 1,
+        }
+    }
+
+    /// Add a permanent fixture that will be available for all tests.
+    pub fn with_permanent_fixture(mut self, fixture: impl Any + Send + Sync) -> Self {
+        self.permanent_fixtures.push(Arc::new(fixture));
         self
     }
 
@@ -190,13 +232,49 @@ impl Config {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Bad exit code")]
+    BadExitCode,
+    #[error("Bad log directory: {0}")]
+    BadLogDir(String, #[source] Option<std::io::Error>),
+    #[error("Expected to be run in unshare, but was not")]
+    NotInUnshare,
+    #[error("Expected to be run outside of unshare, but was in unshare")]
+    InUnshare,
+}
+
+pub enum ExitUnshare {
+    Passed = 0,
+    Skipped = 1,
+    Failed = 2,
+}
+
+impl From<ExitUnshare> for ExitCode {
+    fn from(exit: ExitUnshare) -> Self {
+        ExitCode::from(exit as u8)
+    }
+}
+
+impl TryFrom<ExitCode> for ExitUnshare {
+    type Error = Error;
+    fn try_from(exit_code: ExitCode) -> Result<Self, Self::Error> {
+        match exit_code {
+            code if code == ExitUnshare::Passed.into() => Ok(ExitUnshare::Passed),
+            code if code == ExitUnshare::Skipped.into() => Ok(ExitUnshare::Skipped),
+            code if code == ExitUnshare::Failed.into() => Ok(ExitUnshare::Failed),
+            _ => Err(Error::BadExitCode),
+        }
+    }
+}
+
 struct Root;
 
 impl Group for Root {
     type Fixture = ();
 
     fn name(&self) -> &str {
-        ""
+        Self::NAME
     }
 
     fn tests(&self) -> &[Box<dyn RunTest>] {
@@ -230,27 +308,114 @@ impl RootGroup for Root {
     }
 }
 
+impl Root {
+    const NAME: &'static str = "";
+
+    fn groups_tests_for_namespaces(&self, filter: &Filter) -> Vec<String> {
+        self.group_test_names()
+            .filter(|(group_name, test_name)| filter.consider_test(group_name, test_name))
+            .map(|(group_name, test_name)| {
+                if group_name == Self::NAME {
+                    test_name
+                } else {
+                    group_name
+                }
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+}
+
 /// Main entry point for running tests.
 ///
 /// It takes `Config` argument. Returns `Statistics` about the test run.
 #[framed]
-pub async fn run(config: Config) -> Statistics {
+pub fn run(config: Config) -> Statistics {
     panic::set_hook(Box::new(|info| {
         error!("{info}");
     }));
 
-    let fixtures = Fixtures::with_permanent(config.permanent_fixtures.into_iter());
+    if unshare_info().is_some() {
+        panic!("run() should be called outside of unshare, but was called inside unshare");
+    }
+
     let root = Root;
     let filter = Filter::new(&config.filters, &root);
+    let groups_tests = root.groups_tests_for_namespaces(&filter);
 
-    run::run(
-        fixtures,
-        &root,
-        filter,
-        config.default_timeout,
-        config.concurrency,
-    )
-    .await
+    let mut in_progress: Vec<(Child, IpcOneShotServer<Statistics>)> = vec![];
+    let mut final_stats = Statistics::new();
+
+    let mut handle_done_work = |in_progress: &mut Vec<(Child, IpcOneShotServer<Statistics>)>| {
+        in_progress
+            .extract_if(.., |(child, _)| child.try_wait().unwrap().is_some())
+            .map(|(_, ipc_server)| {
+                let (_, stats) = ipc_server.accept().unwrap();
+                stats
+            })
+            .for_each(|stats| {
+                final_stats += stats;
+            });
+    };
+
+    const SLEEP_DURATION: Duration = Duration::from_millis(100);
+
+    groups_tests.into_iter().for_each(|group_name| {
+        loop {
+            handle_done_work(&mut in_progress);
+            if in_progress.len() < config.concurrency {
+                break;
+            }
+            thread::sleep(SLEEP_DURATION);
+        }
+        in_progress.push(unshare::spawn(group_name));
+    });
+
+    while !in_progress.is_empty() {
+        handle_done_work(&mut in_progress);
+        thread::sleep(SLEEP_DURATION);
+    }
+
+    if final_stats.is_success() {
+        info!("test run ok: {final_stats:?}");
+    } else {
+        error!("test run failed: {final_stats:?}");
+    }
+    final_stats
+}
+
+/// Main entry point for running single test.
+///
+/// It takes `Config` argument and a root group. Returns `Statistics` about the test run.
+#[framed]
+pub fn run_in_unshare(config: ConfigUnshare) {
+    panic::set_hook(Box::new(|info| {
+        error!("{info}");
+    }));
+
+    unshare::init_namespaces();
+
+    let root = Root;
+    let filter = Filter::new(&[config.info.filter], &root);
+
+    let fixtures = Fixtures::with_permanent(config.permanent_fixtures.into_iter());
+
+    let stats = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run::run(
+            fixtures,
+            &root,
+            filter,
+            config.default_timeout,
+            config.concurrency,
+        ));
+
+    let tx = IpcSender::connect(config.info.ipc_channel).unwrap();
+    tx.send(stats.clone()).unwrap();
 }
 
 /// Returns a list of all group names defined in the test suite.

@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-use e2etest::Config;
+use e2etest::ConfigUnshare;
 use e2etest::Setup;
+use e2etest::Statistics;
+use e2etest::UnshareInfo;
+use ipc_channel::ipc::IpcOneShotServer;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -78,17 +81,21 @@ async fn test5(fixture: Arc<NotConcurrently>) {
     }
 }
 
-#[tokio::test]
-async fn concurrency() {
+#[test]
+fn concurrency() {
     let log = Arc::new(Mutex::new(Vec::new()));
 
-    let stats = e2etest::run(
-        Config::default()
-            .with_permanent_fixture(Log(Arc::clone(&log)))
-            .with_default_timeout(Duration::from_secs(1))
-            .with_concurrency(10),
-    )
-    .await;
+    let (rx, ipc_channel) = IpcOneShotServer::<Statistics>::new().unwrap();
+    e2etest::run_in_unshare(
+        ConfigUnshare::new(UnshareInfo {
+            filter: "".to_string(),
+            ipc_channel,
+        })
+        .with_permanent_fixture(Log(Arc::clone(&log)))
+        .with_default_timeout(Duration::from_secs(1))
+        .with_concurrency(10),
+    );
+    let (_, stats) = rx.accept().unwrap();
 
     let log = log.lock().unwrap();
     let log = log.as_slice();

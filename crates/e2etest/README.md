@@ -99,21 +99,29 @@ async fn number_and_octet(two: Arc<FixtureTwo>, three: Arc<FixtureThree>) {
 
 }
 
-tokio::runtime::Runtime::new().unwrap().block_on(async move {
-    use std::net::Ipv4Addr;
-    use std::time::Duration;
+use std::net::Ipv4Addr;
+use std::time::Duration;
 
-    let config = e2etest::Config::default()
-        .with_permanent_fixture(sample::FixtureCfg { dns_ip: Ipv4Addr::new(127, 0, 100, 1) })
-        .with_default_timeout(Duration::from_secs(10));
-    let stats = e2etest::run(config).await;
-    assert!(stats.is_success());
-    assert_eq!(stats.tests_defined(), 3);
-    assert_eq!(stats.tests_included(), 3);
-    assert_eq!(stats.tests_launched(), 2);
-    assert_eq!(stats.tests_passed(), 2);
-    assert_eq!(stats.tests_skipped(), 1);
-});
+tracing_subscriber::fmt::init();
+
+if let Some(unshare_info) = e2etest::unshare_info() {
+    let config = e2etest::ConfigUnshare::new(unshare_info)
+            .with_permanent_fixture(sample::FixtureCfg { dns_ip: Ipv4Addr::new(127, 0, 100, 1) })
+            .with_default_timeout(Duration::from_secs(10))
+            .with_concurrency(10);
+    e2etest::run_in_unshare(config);
+    return;
+}
+let config = e2etest::Config::default()
+    .with_concurrency(10);
+let stats = e2etest::run(config);
+
+assert!(stats.is_success());
+assert_eq!(stats.tests_defined(), 3);
+assert_eq!(stats.tests_included(), 3);
+assert_eq!(stats.tests_launched(), 2);
+assert_eq!(stats.tests_passed(), 2);
+assert_eq!(stats.tests_skipped(), 1);
 ```
 
 **Sample code for script to run in the unshared environment:**

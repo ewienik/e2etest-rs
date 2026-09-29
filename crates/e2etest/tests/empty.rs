@@ -3,13 +3,21 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-use e2etest::Config;
+use e2etest::ConfigUnshare;
+use e2etest::Statistics;
+use e2etest::UnshareInfo;
+use ipc_channel::ipc::IpcOneShotServer;
 
 e2etest::group!(name = empty_group);
 
-#[tokio::test]
-async fn empty() {
-    let stats = e2etest::run(Config::default()).await;
+#[test]
+fn empty() {
+    let (rx, ipc_channel) = IpcOneShotServer::<Statistics>::new().unwrap();
+    e2etest::run_in_unshare(ConfigUnshare::new(UnshareInfo {
+        filter: "".to_string(),
+        ipc_channel,
+    }));
+    let (_, stats) = rx.accept().unwrap();
 
     assert!(!stats.is_success());
     assert_eq!(stats.tests_defined(), 0);

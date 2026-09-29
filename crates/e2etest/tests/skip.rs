@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-use e2etest::Config;
+use e2etest::ConfigUnshare;
 use e2etest::Setup;
 use e2etest::Skip;
+use e2etest::Statistics;
+use e2etest::UnshareInfo;
+use ipc_channel::ipc::IpcOneShotServer;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -46,16 +49,20 @@ async fn in_skipped_group(fixture: Arc<Fixture>) {
     fixture.0.0.fetch_add(1, Ordering::Relaxed);
 }
 
-#[tokio::test]
-async fn skip() {
+#[test]
+fn skip() {
     let counter = Arc::new(AtomicUsize::new(0));
 
-    let stats = e2etest::run(
-        Config::default()
-            .with_permanent_fixture(Counter(Arc::clone(&counter)))
-            .with_default_timeout(Duration::from_secs(1)),
-    )
-    .await;
+    let (rx, ipc_channel) = IpcOneShotServer::<Statistics>::new().unwrap();
+    e2etest::run_in_unshare(
+        ConfigUnshare::new(UnshareInfo {
+            filter: "".to_string(),
+            ipc_channel,
+        })
+        .with_permanent_fixture(Counter(Arc::clone(&counter)))
+        .with_default_timeout(Duration::from_secs(1)),
+    );
+    let (_, stats) = rx.accept().unwrap();
 
     // 4 tests - 2 test-skipped
     assert_eq!(counter.load(Ordering::Relaxed), 2);
