@@ -77,9 +77,7 @@ impl e2etest::Fixture for FixtureThree {
     async fn teardown(self) { }
 }
 
-e2etest::group!(name = root, fixtures = (FixtureOne));
-
-e2etest::group!(name = group, fixtures = (FixtureTwo), parent = root);
+e2etest::group!(name = group, fixtures = (FixtureTwo));
 
 #[e2etest::test(group = group, timeout = Duration::from_secs(5))]
 async fn dns_ip_100(one: Arc<FixtureOne>, two: Arc<FixtureTwo>) {
@@ -92,7 +90,7 @@ async fn dns_ip_200(one: Arc<FixtureOne>, _: Arc<e2etest::Skip>) {
     assert_eq!(one.dns_ip, Ipv4Addr::new(127, 0, 200, 1));
 }
 
-#[e2etest::test(group = group)]
+#[e2etest::test()]
 async fn number_and_octet(two: Arc<FixtureTwo>, three: Arc<FixtureThree>) {
     assert_eq!(two.octet, 100);
     assert_eq!(three.number, 100 * 1024);
@@ -107,7 +105,7 @@ tokio::runtime::Runtime::new().unwrap().block_on(async move {
     let config = e2etest::Config::default()
         .with_permanent_fixture(sample::FixtureCfg { dns_ip: Ipv4Addr::new(127, 0, 100, 1) })
         .with_default_timeout(Duration::from_secs(10));
-    let stats = e2etest::run(config, sample::root()).await;
+    let stats = e2etest::run(config).await;
     assert!(stats.is_success());
     assert_eq!(stats.tests_defined(), 3);
     assert_eq!(stats.tests_included(), 3);
