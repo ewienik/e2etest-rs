@@ -24,13 +24,17 @@ impl Fixture for FixtureCount {
     async fn teardown(self) {}
 }
 
-e2etest::group!(name = filter_root);
-e2etest::group!(name = filter_group1, parent = filter_root);
-e2etest::group!(name = filter_group1_1, parent = filter_group1);
-e2etest::group!(name = filter_group1_2, parent = filter_group1);
-e2etest::group!(name = filter_group2, parent = filter_root);
-e2etest::group!(name = filter_group2_1, parent = filter_group2);
-e2etest::group!(name = filter_group2_2, parent = filter_group2);
+#[e2etest::test()]
+async fn filter_test1(fixture: Arc<FixtureCount>) {
+    fixture.0.0.fetch_add(1, Ordering::Relaxed);
+}
+
+#[e2etest::test()]
+async fn filter_test2(fixture: Arc<FixtureCount>) {
+    fixture.0.0.fetch_add(1, Ordering::Relaxed);
+}
+
+e2etest::group!(name = filter_group1);
 
 #[e2etest::test(group = filter_group1)]
 async fn filter_test1_1(fixture: Arc<FixtureCount>) {
@@ -42,25 +46,7 @@ async fn filter_test1_2(fixture: Arc<FixtureCount>) {
     fixture.0.0.fetch_add(1, Ordering::Relaxed);
 }
 
-#[e2etest::test(group = filter_group1_1)]
-async fn filter_test1_1_1(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group1_1)]
-async fn filter_test1_1_2(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group1_2)]
-async fn filter_test1_2_1(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group1_2)]
-async fn filter_test1_2_2(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
+e2etest::group!(name = filter_group2);
 
 #[e2etest::test(group = filter_group2)]
 async fn filter_test2_1(fixture: Arc<FixtureCount>) {
@@ -69,26 +55,6 @@ async fn filter_test2_1(fixture: Arc<FixtureCount>) {
 
 #[e2etest::test(group = filter_group2)]
 async fn filter_test2_2(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group2_1)]
-async fn filter_test2_1_1(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group2_1)]
-async fn filter_test2_1_2(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group2_2)]
-async fn filter_test2_2_1(fixture: Arc<FixtureCount>) {
-    fixture.0.0.fetch_add(1, Ordering::Relaxed);
-}
-
-#[e2etest::test(group = filter_group2_2)]
-async fn filter_test2_2_2(fixture: Arc<FixtureCount>) {
     fixture.0.0.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -101,18 +67,19 @@ async fn filter_by_group() {
             .with_permanent_fixture(Counter(Arc::clone(&counter)))
             .with_filter("group1::")
             .with_default_timeout(Duration::from_secs(1)),
-        filter_root(),
     )
     .await;
 
-    // 6 tests
-    assert_eq!(counter.load(Ordering::Relaxed), 6);
+    // 2 tests
+    assert_eq!(counter.load(Ordering::Relaxed), 2);
 
     assert!(stats.is_success());
-    assert_eq!(stats.tests_defined(), 12);
-    assert_eq!(stats.tests_included(), 6);
-    assert_eq!(stats.tests_launched(), 6);
-    assert_eq!(stats.tests_passed(), 6);
+    assert_eq!(stats.groups_defined(), 2);
+    assert_eq!(stats.groups_included(), 1);
+    assert_eq!(stats.tests_defined(), 6);
+    assert_eq!(stats.tests_included(), 2);
+    assert_eq!(stats.tests_launched(), 2);
+    assert_eq!(stats.tests_passed(), 2);
 }
 
 #[tokio::test]
@@ -122,18 +89,36 @@ async fn filter_by_test() {
     let stats = e2etest::run(
         Config::default()
             .with_permanent_fixture(Counter(Arc::clone(&counter)))
-            .with_filter("::test2_2")
+            .with_filter("::test2_")
             .with_default_timeout(Duration::from_secs(1)),
-        filter_root(),
     )
     .await;
 
-    // 3 tests
-    assert_eq!(counter.load(Ordering::Relaxed), 3);
+    // 2 tests
+    assert_eq!(counter.load(Ordering::Relaxed), 2);
 
     assert!(stats.is_success());
-    assert_eq!(stats.tests_defined(), 12);
-    assert_eq!(stats.tests_included(), 3);
-    assert_eq!(stats.tests_launched(), 3);
-    assert_eq!(stats.tests_passed(), 3);
+    assert_eq!(stats.tests_defined(), 6);
+    assert_eq!(stats.tests_included(), 2);
+    assert_eq!(stats.tests_launched(), 2);
+    assert_eq!(stats.tests_passed(), 2);
+}
+
+#[test]
+fn test_and_group_names() {
+    assert_eq!(
+        e2etest::group_names(),
+        ["filter::filter_group1", "filter::filter_group2"]
+    );
+    assert_eq!(
+        e2etest::test_names(),
+        [
+            "filter::filter_test1",
+            "filter::filter_test1_1",
+            "filter::filter_test1_2",
+            "filter::filter_test2",
+            "filter::filter_test2_1",
+            "filter::filter_test2_2"
+        ]
+    );
 }
