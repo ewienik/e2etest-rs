@@ -124,8 +124,6 @@ impl Parse for GroupParams {
 /// - `name`: the name of the group (required)
 /// - `fixtures`: a tuple of fixture types that will be set up for each test in the group
 ///   (optional).
-///
-/// If you use this macro you should add `linkme` as a dependency in your crate.
 #[proc_macro]
 pub fn group(item: TokenStream) -> TokenStream {
     let params = parse_macro_input!(item as GroupParams);
@@ -143,7 +141,8 @@ fn generate_group(params: GroupParams) -> syn::Result<proc_macro2::TokenStream> 
     let group_type = Ident::new(&group_type_name(&name_string), name.span());
 
     let expanded = quote! {
-        #[linkme::distributed_slice]
+        #[e2etest::__linkme::distributed_slice]
+        #[linkme(crate = e2etest::__linkme)]
         pub static #group_tests: [fn() -> Box<dyn e2etest::RunTest>];
 
         struct #group_fixture(#(std::sync::Arc<#fixtures>),*);
@@ -174,7 +173,8 @@ fn generate_group(params: GroupParams) -> syn::Result<proc_macro2::TokenStream> 
             }
         }
 
-        #[linkme::distributed_slice(e2etest::E2ETEST_GROUPS)]
+        #[e2etest::__linkme::distributed_slice(e2etest::E2ETEST_GROUPS)]
+        #[linkme(crate = e2etest::__linkme)]
         pub fn #name() -> Box<dyn e2etest::RunGroup> {
             Box::new(#group_type)
         }
@@ -265,9 +265,6 @@ fn take_fixtures(run: &ItemFn) -> syn::Result<Vec<TypePath>> {
 ///
 /// The test function must be async, return `()`, and take as arguments a list of `Arc<Fixture>`
 /// as a list of fixtures used inside the test.
-///
-/// If you use this macro you should add `linkme` and `async-backtrace` as a dependency in your
-/// crate.
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let params = parse_macro_input!(attr as TestParams);
@@ -295,11 +292,13 @@ fn generate_test(params: TestParams, run: ItemFn) -> syn::Result<proc_macro2::To
         };
         last.ident = Ident::new(&group_tests_name(&group_name), last.ident.span());
         quote! {
-            #[linkme::distributed_slice(#group_tests)]
+            #[e2etest::__linkme::distributed_slice(#group_tests)]
+            #[linkme(crate = e2etest::__linkme)]
         }
     } else {
         quote! {
-            #[linkme::distributed_slice(e2etest::E2ETEST_TESTS)]
+            #[e2etest::__linkme::distributed_slice(e2etest::E2ETEST_TESTS)]
+            #[linkme(crate = e2etest::__linkme)]
         }
     };
 
@@ -320,6 +319,10 @@ fn generate_test(params: TestParams, run: ItemFn) -> syn::Result<proc_macro2::To
             "Expected the test function to return ()",
         ));
     }
+    let run_attrs = &run.attrs;
+    let run_vis = &run.vis;
+    let run_sig = &run.sig;
+    let run_block = &run.block;
 
     let timeout = if let Some(timeout) = &params.timeout {
         quote! {
@@ -366,8 +369,9 @@ fn generate_test(params: TestParams, run: ItemFn) -> syn::Result<proc_macro2::To
             Box::new(#test_type)
         }
 
-        #[async_backtrace::framed]
-        #run
+        #(#run_attrs)* #run_vis #run_sig {
+            e2etest::__async_backtrace::frame!(async move #run_block).await
+        }
     };
 
     Ok(expanded)
