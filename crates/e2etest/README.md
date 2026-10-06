@@ -17,8 +17,9 @@ other testing actors - so the provided binary ought to be run in the unshared
 environment.  In the future `e2etest` will provide the unshared environment
 directly, without additional setup.
 
-To use macros provided by `e2etest`, you need to add `linkme` and
-`async-backtrace` to your `Cargo.toml` dependencies.
+`e2etest` uses internally `async-backtrace` crate to provide better stack
+traces for async code. If you want to use `async-backtrace` in your own code,
+you need to add it explicitly to your dependencies.
 
 
 **Sample code for using `e2etest`**

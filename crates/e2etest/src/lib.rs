@@ -122,9 +122,13 @@ pub use crate::group::RunGroup;
 pub use crate::statistics::Statistics;
 pub use crate::test::RunTest;
 pub use crate::test::Test;
+#[doc(hidden)]
+pub use async_backtrace as __async_backtrace;
 use async_backtrace::framed;
 pub use e2etest_macros::group;
 pub use e2etest_macros::test;
+#[doc(hidden)]
+pub use linkme as __linkme;
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::panic;
