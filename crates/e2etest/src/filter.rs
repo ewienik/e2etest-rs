@@ -5,140 +5,60 @@
 
 use crate::group::RunGroup;
 use itertools::Itertools;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::iter;
 use std::sync::Arc;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FilterMatcher<'a> {
-    Any,
-    Partial(&'a str),
-    Exact(&'a str),
-}
-
-impl<'a> FilterMatcher<'a> {
-    fn new(filter: &'a str) -> Self {
-        if filter.is_empty() {
-            Self::Any
-        } else if let Some(filter) = filter
-            .strip_prefix('"')
-            .and_then(|filter| filter.strip_suffix('"'))
-        {
-            Self::Exact(filter)
-        } else {
-            Self::Partial(filter)
-        }
-    }
-
-    fn matches(self, candidate: &str) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Partial(filter) => candidate.contains(filter),
-            Self::Exact(filter) => candidate == filter,
-        }
-    }
-}
+use wildmatch::WildMatch;
 
 /// Represents the filter configuration for test execution.
-#[derive(Clone, Debug)]
-pub(crate) struct Filter {
-    /// - Key: test group name (e.g., "crud", "full_scan")
-    /// - Value: HashSet of specific test names within that group (empty means run all tests in
-    ///   group)
-    tests: Arc<HashMap<String, HashSet<String>>>,
-    groups: Arc<HashSet<String>>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Filter {
+    All,
+    Some {
+        tests: Arc<BTreeSet<String>>,
+        groups: Arc<BTreeSet<String>>,
+    },
 }
 
 impl Filter {
     pub(crate) fn empty() -> Self {
-        Self {
-            tests: Arc::new(HashMap::new()),
-            groups: Arc::new(HashSet::new()),
-        }
+        Self::All
     }
 
     /// Parse command line filters into the expected filter format for test execution.
     pub(crate) fn new(filters: &[String], group: &dyn RunGroup) -> Self {
-        let mut filter_map = HashMap::new();
-        let mut group_set = HashSet::new();
-
         if filters.is_empty() {
-            // Run all tests
-            return Self {
-                tests: Arc::new(filter_map),
-                groups: Arc::new(group_set),
-            };
+            return Self::All;
         }
+
+        let mut filtered_tests = BTreeSet::new();
+        let mut filtered_groups = BTreeSet::new();
 
         let parent_name = group.name().to_string();
-        let mut update_group_set = |group_name: &str| {
-            group_name
-                .split("::")
-                .fold(parent_name.clone(), |acc, name| {
-                    let acc = format!("{acc}::{name}");
-                    group_set.insert(acc.clone());
-                    acc
-                })
-        };
-        for filter in filters {
-            // Check for <group>::<test> syntax
-            if let Some((group_part, test_part)) = filter.rsplit_once("::") {
-                let group_filter = FilterMatcher::new(group_part);
-                let test_filter = FilterMatcher::new(test_part);
-
-                for (group_name, test_name) in group
+        filters
+            .iter()
+            .map(|filter| WildMatch::new(filter))
+            .for_each(|filter| {
+                group
                     .test_names()
                     .iter()
                     .filter_map(|name| name.rsplit_once("::"))
-                {
-                    if !group_filter.matches(group_name) {
-                        continue;
-                    }
+                    .map(|(group_name, test_name)| {
+                        (
+                            format!("{parent_name}::{group_name}"),
+                            format!("{parent_name}::{group_name}::{test_name}"),
+                        )
+                    })
+                    .filter(|(_, test_name)| filter.matches(test_name))
+                    .for_each(|(group_name, test_name)| {
+                        filtered_groups.insert(group_name);
+                        filtered_tests.insert(test_name);
+                    });
+            });
 
-                    let parent_group_name = format!("{parent_name}::{group_name}");
-                    if matches!(test_filter, FilterMatcher::Any) {
-                        filter_map.entry(parent_group_name).or_default();
-                        update_group_set(group_name);
-                        continue;
-                    }
-                    if test_filter.matches(test_name) {
-                        filter_map
-                            .entry(parent_group_name)
-                            .or_default()
-                            .insert(test_name.to_string());
-                        update_group_set(group_name);
-                    }
-                }
-            } else {
-                // Not found `::`, check for matching both group and test case name
-                let filter = FilterMatcher::new(filter);
-
-                for (group_name, test_name) in group
-                    .test_names()
-                    .iter()
-                    .filter_map(|name| name.rsplit_once("::"))
-                {
-                    let parent_group_name = format!("{parent_name}::{group_name}");
-                    if filter.matches(group_name) {
-                        filter_map.entry(parent_group_name).or_default();
-                        update_group_set(group_name);
-                        continue;
-                    }
-                    if filter.matches(test_name) {
-                        filter_map
-                            .entry(parent_group_name)
-                            .or_default()
-                            .insert(test_name.to_string());
-                        update_group_set(group_name);
-                    }
-                }
-            }
-        }
-
-        Self {
-            tests: Arc::new(filter_map),
-            groups: Arc::new(group_set),
+        Self::Some {
+            tests: Arc::new(filtered_tests),
+            groups: Arc::new(filtered_groups),
         }
     }
 
@@ -147,12 +67,17 @@ impl Filter {
         group_names: impl IntoIterator<Item = impl AsRef<str>>,
         group_name: &str,
     ) -> bool {
-        let group_name = group_names
-            .into_iter()
-            .map(|v| v.as_ref().to_string())
-            .chain(iter::once(group_name.to_string()))
-            .join("::");
-        self.groups.is_empty() || self.groups.contains(&group_name)
+        match self {
+            Self::All => true,
+            Self::Some { groups, .. } => {
+                let group_name = group_names
+                    .into_iter()
+                    .map(|v| v.as_ref().to_string())
+                    .chain(iter::once(group_name.to_string()))
+                    .join("::");
+                groups.contains(&group_name)
+            }
+        }
     }
 
     pub(crate) fn consider_test(
@@ -160,17 +85,16 @@ impl Filter {
         group_names: impl IntoIterator<Item = impl AsRef<str>>,
         test_name: &str,
     ) -> bool {
-        if self.tests.is_empty() {
-            return true;
-        }
-        let group_name = group_names
-            .into_iter()
-            .map(|v| v.as_ref().to_string())
-            .join("::");
-        if let Some(tests) = self.tests.get(&group_name) {
-            tests.is_empty() || tests.contains(test_name)
-        } else {
-            false
+        match self {
+            Self::All => true,
+            Self::Some { tests, .. } => {
+                let test_name = group_names
+                    .into_iter()
+                    .map(|v| v.as_ref().to_string())
+                    .chain(iter::once(test_name.to_string()))
+                    .join("::");
+                tests.contains(&test_name)
+            }
         }
     }
 }
@@ -270,7 +194,7 @@ mod tests {
             tests: vec![],
             groups: vec![
                 make_dummy_group("crud", &["simple_create", "drop_index"]),
-                make_dummy_group("full_scan", &["scan_index", "scan_all"]),
+                make_dummy_group("full_scan", &["scan_index", "scan_undex", "scan_all"]),
                 make_dummy_group("other", &["misc", "simple_misc"]),
             ],
         })
@@ -292,123 +216,266 @@ mod tests {
         let test_cases = make_test_cases();
         let filters: Vec<String> = vec![];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.is_empty());
-        assert!(result.tests.is_empty());
+        assert_eq!(result, Filter::All);
     }
 
     #[test]
     fn test_empty_filters_runs_all() {
         let test_cases = make_test_cases();
-        let filters: Vec<String> = vec!["::".to_string()];
+        let filters: Vec<String> = vec!["*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        // It should contain all available test groups with empty test cases (running all)
-        assert_eq!(result.groups.len(), 3);
-        assert_eq!(result.tests.len(), 3);
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].is_empty());
-        assert!(result.groups.contains("root::full_scan"));
-        assert!(result.tests["root::full_scan"].is_empty());
-        assert!(result.groups.contains("root::other"));
-        assert!(result.tests["root::other"].is_empty());
+
+        // It should contain all available test cases
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(
+                    ["root::crud", "root::full_scan", "root::other"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+                tests: Arc::new(
+                    [
+                        "root::crud::drop_index",
+                        "root::crud::simple_create",
+                        "root::full_scan::scan_all",
+                        "root::full_scan::scan_index",
+                        "root::full_scan::scan_undex",
+                        "root::other::misc",
+                        "root::other::simple_misc",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_group_partial_match() {
+    fn test_wrong_filters_runs_nothing() {
         let test_cases = make_test_cases();
-        let filters = vec!["crud".to_string()];
+        let filters: Vec<String> = vec!["bad_name".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests.contains_key("root::crud"));
-        assert!(result.tests["root::crud"].is_empty());
-        assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.tests.len(), 1);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(BTreeSet::new()),
+                tests: Arc::new(BTreeSet::new()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_module_partial_match() {
+        let test_cases = make_test_cases();
+        let filters = vec!["*crud*".into()];
+        let result = Filter::new(&filters, test_cases.as_ref());
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(["root::crud"].into_iter().map(String::from).collect()),
+                tests: Arc::new(
+                    ["root::crud::drop_index", "root::crud::simple_create",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
     }
 
     #[test]
     fn test_test_case_partial_match() {
         let test_cases = make_test_cases();
-        let filters = vec!["simple".to_string()];
+        let filters = vec!["*simple*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].contains("simple_create"));
-        assert!(result.groups.contains("root::other"));
-        assert!(result.tests["root::other"].contains("simple_misc"));
-        assert_eq!(result.groups.len(), 2);
-        assert_eq!(result.tests.len(), 2);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(
+                    ["root::crud", "root::other"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+                tests: Arc::new(
+                    ["root::crud::simple_create", "root::other::simple_misc",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_group_and_test_case_syntax() {
+    fn test_test_case_question_sign() {
         let test_cases = make_test_cases();
-        let filters = vec!["crud::simple".to_string()];
+        let filters = vec!["*_?ndex*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].contains("simple_create"));
-        assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.tests.len(), 1);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(
+                    ["root::crud", "root::full_scan"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+                tests: Arc::new(
+                    [
+                        "root::crud::drop_index",
+                        "root::full_scan::scan_index",
+                        "root::full_scan::scan_undex",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_group_and_empty_test_case_syntax() {
+    fn test_module_and_test_case_syntax() {
         let test_cases = make_test_cases();
-        let filters = vec!["crud::".to_string()];
+        let filters = vec!["*crud*::*simple*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests.contains_key("root::crud"));
-        assert!(result.tests["root::crud"].is_empty());
-        assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.tests.len(), 1);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(["root::crud"].into_iter().map(String::from).collect()),
+                tests: Arc::new(
+                    ["root::crud::simple_create",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_empty_group_and_test_case_syntax() {
+    fn test_module_and_empty_test_case_syntax() {
         let test_cases = make_test_cases();
-        let filters = vec!["::simple".to_string()];
+        let filters = vec!["*crud*::*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].contains("simple_create"));
-        assert!(result.groups.contains("root::other"));
-        assert!(result.tests["root::other"].contains("simple_misc"));
-        assert_eq!(result.groups.len(), 2);
-        assert_eq!(result.tests.len(), 2);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(["root::crud"].into_iter().map(String::from).collect()),
+                tests: Arc::new(
+                    ["root::crud::drop_index", "root::crud::simple_create",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_exact_group_match_syntax() {
+    fn test_empty_module_and_test_case_syntax() {
+        let test_cases = make_test_cases();
+        let filters = vec!["*::*simple*".into()];
+        let result = Filter::new(&filters, test_cases.as_ref());
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(
+                    ["root::crud", "root::other"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+                tests: Arc::new(
+                    ["root::crud::simple_create", "root::other::simple_misc",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn test_exact_module_match_syntax() {
         let test_cases = make_overlapping_test_cases();
-        let filters = vec!["\"crud\"::".to_string()];
+        let filters = vec!["root::crud::*".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests.contains_key("root::crud"));
-        assert!(result.tests["root::crud"].is_empty());
-        assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.tests.len(), 1);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(["root::crud"].into_iter().map(String::from).collect()),
+                tests: Arc::new(
+                    [
+                        "root::crud::simple_create",
+                        "root::crud::simple_create_extra",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+                ),
+            }
+        );
     }
 
     #[test]
     fn test_exact_test_case_match_syntax() {
         let test_cases = make_overlapping_test_cases();
-        let filters = vec!["::\"simple_create\"".to_string()];
+        let filters = vec!["*::simple_create".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].contains("simple_create"));
-        assert!(!result.tests["root::crud"].contains("simple_create_extra"));
-        assert!(result.groups.contains("root::crud_extra"));
-        assert!(result.tests["root::crud_extra"].contains("simple_create"));
-        assert!(!result.tests["root::crud_extra"].contains("simple_create_additional"));
-        assert_eq!(result.groups.len(), 2);
-        assert_eq!(result.tests.len(), 2);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(
+                    ["root::crud", "root::crud_extra"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+                tests: Arc::new(
+                    [
+                        "root::crud::simple_create",
+                        "root::crud_extra::simple_create",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+                ),
+            }
+        );
     }
 
     #[test]
-    fn test_exact_group_and_test_case_syntax() {
+    fn test_exact_module_and_test_case_syntax() {
         let test_cases = make_overlapping_test_cases();
-        let filters = vec!["\"crud\"::\"simple_create\"".to_string()];
+        let filters = vec!["root::crud::simple_create".into()];
         let result = Filter::new(&filters, test_cases.as_ref());
-        assert!(result.groups.contains("root::crud"));
-        assert!(result.tests["root::crud"].contains("simple_create"));
-        assert!(!result.tests["root::crud"].contains("simple_create_extra"));
-        assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.tests.len(), 1);
+
+        assert_eq!(
+            result,
+            Filter::Some {
+                groups: Arc::new(["root::crud"].into_iter().map(String::from).collect()),
+                tests: Arc::new(
+                    ["root::crud::simple_create",]
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                ),
+            }
+        );
     }
 }
