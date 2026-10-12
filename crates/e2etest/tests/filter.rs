@@ -93,13 +93,13 @@ async fn filter_test2_2_2(fixture: Arc<FixtureCount>) {
 }
 
 #[tokio::test]
-async fn filter_by_group() {
+async fn filter_by_module() {
     let counter = Arc::new(AtomicUsize::new(0));
 
     let stats = e2etest::run(
         Config::default()
             .with_permanent_fixture(Counter(Arc::clone(&counter)))
-            .with_filter("group1::")
+            .with_filter("*group1*::*")
             .with_default_timeout(Duration::from_secs(1)),
         filter_root(),
     )
@@ -122,7 +122,7 @@ async fn filter_by_test() {
     let stats = e2etest::run(
         Config::default()
             .with_permanent_fixture(Counter(Arc::clone(&counter)))
-            .with_filter("::test2_2")
+            .with_filter("*::*test2_2*")
             .with_default_timeout(Duration::from_secs(1)),
         filter_root(),
     )

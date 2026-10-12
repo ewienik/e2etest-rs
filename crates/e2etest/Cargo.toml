@@ -17,6 +17,7 @@ futures.workspace = true
 itertools.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+wildmatch.workspace = true
 
 [dev-dependencies]
 linkme.workspace = true

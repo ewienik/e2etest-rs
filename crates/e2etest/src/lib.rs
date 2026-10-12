@@ -162,6 +162,9 @@ impl Config {
     }
 
     /// Add a filter to select which tests to run.
+    ///
+    /// The syntax of the filter is a name of the test. The filter can contain wildcards '*' and
+    /// '?'. The '*' matches any sequence of characters, and the '?' matches any single character.
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filters.push(filter.into());
         self
