@@ -7,7 +7,6 @@ use crate::fixture::Fixture;
 use crate::run::RunContext;
 use crate::statistics::Task;
 use crate::task;
-use async_backtrace::framed;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,9 +51,8 @@ where
         self.name()
     }
 
-    #[framed]
     fn run_test(&self, ctx: RunContext) -> BoxFuture<'_, ()> {
-        Box::pin(
+        Box::pin(async_backtrace::frame!(
             async move {
                 // Setup the fixture. If it fails, we skip the test and teardown.
                 let fixture = task::setup(
@@ -100,7 +98,7 @@ where
                 )
                 .await;
             }
-            .instrument(error_span!("test", "{}", self.name())),
-        )
+            .instrument(error_span!("test", "{}", self.name()))
+        ))
     }
 }

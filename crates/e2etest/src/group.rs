@@ -8,7 +8,6 @@ use crate::run::RunContext;
 use crate::statistics::Task;
 use crate::task;
 use crate::test::RunTest;
-use async_backtrace::framed;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream;
@@ -68,9 +67,8 @@ where
         Box::new(self.tests().iter().map(|test| test.name()))
     }
 
-    #[framed]
     fn run_group(&self, ctx: RunContext) -> BoxFuture<'_, ()> {
-        Box::pin(
+        Box::pin(async_backtrace::frame!(
             async move {
                 // Setup the fixture. If it fails, we skip the tests
                 let fixture = task::setup(
@@ -119,8 +117,8 @@ where
                 )
                 .await;
             }
-            .instrument(error_span!("group", "{}", self.name())),
-        )
+            .instrument(error_span!("group", "{}", self.name()))
+        ))
     }
 }
 
