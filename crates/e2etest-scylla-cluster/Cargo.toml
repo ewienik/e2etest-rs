@@ -12,8 +12,8 @@ license.workspace = true
 
 [dependencies]
 async-backtrace.workspace = true
-sysinfo.workspace = true
 tap.workspace = true
 tempfile.workspace = true
+testcontainers.workspace = true
 tokio.workspace = true
 tracing.workspace = true

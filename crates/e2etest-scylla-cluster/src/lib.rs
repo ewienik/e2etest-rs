@@ -9,18 +9,22 @@
 
 use async_backtrace::frame;
 use async_backtrace::framed;
+use std::ffi::OsStr;
 use std::net::Ipv4Addr;
-use std::os::unix;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use sysinfo::Gid;
-use sysinfo::Uid;
-use sysinfo::Users;
-use tap::Pipe;
+use tap::Tap;
 use tempfile::TempDir;
+use testcontainers::ContainerAsync;
+use testcontainers::GenericImage;
+use testcontainers::ImageExt;
+use testcontainers::core::Mount;
+use testcontainers::core::WaitFor;
+use testcontainers::core::wait::ExitWaitStrategy;
+use testcontainers::runners::AsyncRunner;
 use tokio::fs;
 use tokio::process::Child;
 use tokio::process::Command;
@@ -211,25 +215,25 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
 }
 
 /// Creates a new ScyllaDB cluster manager actor and returns a sender to send messages to it.
+///
+/// `target` can be either a path to the ScyllaDB executable or a Docker image name (with optional
+/// tag).
 #[framed]
 pub async fn new(
-    path: PathBuf,
+    target: String,
     default_conf: PathBuf,
     tempdir: PathBuf,
     verbose: bool,
 ) -> mpsc::Sender<ScyllaCluster> {
     let (tx, mut rx) = mpsc::channel(10);
 
-    assert!(
-        executable_exists(&path).await,
-        "scylla executable '{path:?}' does not exist"
-    );
+    let target = Target::new(target).await;
     assert!(
         file_exists(&default_conf).await,
         "scylla config '{default_conf:?}' does not exist"
     );
 
-    let mut state = State::new(path, default_conf, tempdir, verbose).await;
+    let mut state = State::new(target, default_conf, tempdir, verbose).await;
 
     tokio::spawn(
         frame!(async move {
@@ -250,14 +254,228 @@ pub async fn new(
     tx
 }
 
+struct Output {
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+enum Target {
+    Binary(PathBuf),
+    Container(GenericImage),
+}
+
+impl Target {
+    async fn new(name: String) -> Self {
+        let path = PathBuf::from(&name);
+        if executable_exists(&path).await {
+            Self::Binary(path)
+        } else {
+            let image = if let Some((name, tag)) = name.split_once(':') {
+                GenericImage::new(name, tag)
+            } else {
+                GenericImage::new(name.as_str(), "latest")
+            };
+            Self::Container(image)
+        }
+    }
+
+    async fn run_with_args(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String> + AsRef<OsStr>>,
+    ) -> Output {
+        match self {
+            Target::Binary(path) => {
+                let output = Command::new(path)
+                    .args(args)
+                    .output()
+                    .await
+                    .expect("run_with_args: failed to execute scylla");
+                let exit_code = output
+                    .status
+                    .code()
+                    .expect("run_with_args: scylla exited without an exit code");
+                Output {
+                    exit_code,
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                }
+            }
+            Target::Container(image) => {
+                let container = image
+                    .clone()
+                    .with_wait_for(WaitFor::exit(ExitWaitStrategy::new()))
+                    .with_cmd(["--version"])
+                    .start()
+                    .await
+                    .expect("run_with_args: failed to start scylla container");
+                let exit_code = container
+                    .exit_code()
+                    .await
+                    .expect("run_with_args: failed to wait for scylla container to exit")
+                    .expect("run_with_args: scylla container exited without an exit code")
+                    as i32;
+                let stdout = container
+                    .stdout_to_vec()
+                    .await
+                    .expect("run_with_args: failed to capture stdout from scylla container");
+                let stderr = container
+                    .stderr_to_vec()
+                    .await
+                    .expect("run_with_args: failed to capture stderr from scylla container");
+                Output {
+                    exit_code,
+                    stdout,
+                    stderr,
+                }
+            }
+        }
+    }
+
+    async fn run(
+        &self,
+        node_config: &ScyllaNodeConfig,
+        workdir: &Path,
+        confdir: &Path,
+        conffile: &Path,
+        seeds: &str,
+        verbose: bool,
+    ) -> Handler {
+        let db_ip = node_config.db_ip;
+        let mut args = vec![
+            db_ip.to_string(),
+            "--rpc-address".to_string(),
+            db_ip.to_string(),
+            "--api-address".to_string(),
+            db_ip.to_string(),
+            "--log-to-stdout".to_string(),
+            "true".to_string(),
+            "--logger-ostream-type".to_string(),
+            "stdout".to_string(),
+            "--endpoint-snitch".to_string(),
+            "GossipingPropertyFileSnitch".to_string(),
+        ]
+        .tap_mut(|args| {
+            if !node_config.primary_vs_uris.is_empty() {
+                args.extend([
+                    "--vector-store-primary-uri".to_string(),
+                    node_config.primary_vs_uris.join(","),
+                ]);
+            }
+        })
+        .tap_mut(|args| {
+            if !node_config.secondary_vs_uris.is_empty() {
+                args.extend([
+                    "--vector-store-secondary-uri".to_string(),
+                    node_config.secondary_vs_uris.join(","),
+                ]);
+            }
+        })
+        .tap_mut(|args| {
+            args.extend(node_config.args.clone());
+        });
+        match self {
+            Target::Binary(path) => {
+                let mut cmd = Command::new(path);
+                if !verbose {
+                    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+                }
+
+                cmd.env("SCYLLA_CONF", confdir);
+
+                args.extend([
+                    "--options-file".to_string(),
+                    conffile.to_string_lossy().to_string(),
+                    "--workdir".to_string(),
+                    workdir.to_string_lossy().to_string(),
+                    "--listen-address".to_string(),
+                ]);
+                if !seeds.is_empty() {
+                    args.extend([
+                        "--seed-provider-parameters".to_string(),
+                        format!("seeds={seeds}"),
+                    ]);
+                }
+
+                let child = cmd
+                    .args(args)
+                    .spawn()
+                    .expect("start: failed to spawn scylladb");
+                Handler::Binary(child)
+            }
+
+            Target::Container(image) => {
+                args.extend([
+                    "--options-file".to_string(),
+                    conffile.to_string_lossy().to_string(),
+                    "--workdir".to_string(),
+                    workdir.to_string_lossy().to_string(),
+                    "--listen-address".to_string(),
+                ]);
+                if !seeds.is_empty() {
+                    args.extend(["--seeds".to_string(), seeds.to_string()]);
+                }
+                let container = image
+                    .clone()
+                    .with_network("host")
+                    .with_env_var("SCYLLA_CONF", confdir.to_string_lossy().to_string())
+                    .with_mount(Mount::bind_mount(
+                        workdir.to_string_lossy(),
+                        "/e2etest/workdir",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        confdir.to_string_lossy(),
+                        "/e2etest/confdir",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        conffile.to_string_lossy(),
+                        "/e2etest/conffile",
+                    ))
+                    .with_cmd(args)
+                    .start()
+                    .await
+                    .expect("run: failed to start scylla container");
+                Handler::Container(Box::new(container))
+            }
+        }
+    }
+}
+
+enum Handler {
+    Binary(Child),
+    Container(Box<ContainerAsync<GenericImage>>),
+}
+
+impl Handler {
+    async fn kill(&mut self) {
+        match self {
+            Handler::Binary(child) => {
+                child
+                    .start_kill()
+                    .expect("kill: failed to send SIGTERM to scylladb process");
+                child
+                    .wait()
+                    .await
+                    .expect("kill: failed to wait for scylladb process to exit");
+            }
+            Handler::Container(container) => {
+                container
+                    .stop()
+                    .await
+                    .expect("kill: failed to stop scylladb container");
+            }
+        }
+    }
+}
+
 struct NodeState {
     db_ip: Ipv4Addr,
-    child: Option<Child>,
+    handler: Option<Handler>,
     workdir: Option<TempDir>,
 }
 
 struct State {
-    path: PathBuf,
+    target: Target,
     default_conf: PathBuf,
     tempdir: PathBuf,
     nodes: Vec<NodeState>,
@@ -267,20 +485,13 @@ struct State {
 
 impl State {
     #[framed]
-    async fn new(path: PathBuf, default_conf: PathBuf, tempdir: PathBuf, verbose: bool) -> Self {
-        let version = String::from_utf8_lossy(
-            &Command::new(&path)
-                .arg("--version")
-                .output()
-                .await
-                .expect("db: State::new: failed to execute scylla")
-                .stdout,
-        )
-        .trim()
-        .to_string();
+    async fn new(target: Target, default_conf: PathBuf, tempdir: PathBuf, verbose: bool) -> Self {
+        let version = String::from_utf8_lossy(&target.run_with_args(["--version"]).await.stdout)
+            .trim()
+            .to_string();
 
         Self {
-            path,
+            target,
             default_conf,
             version,
             tempdir,
@@ -348,7 +559,7 @@ async fn run_node(
     path: &Path,
     rack: &str,
     state: &State,
-) -> Child {
+) -> Handler {
     let has_tls = node_config.cert_path.is_some() && node_config.key_path.is_some();
     let has_extra = node_config.extra_config.is_some();
 
@@ -398,56 +609,10 @@ async fn run_node(
         .await
         .expect("start: failed to write cassandra-rackdc.properties");
 
-    let mut cmd = Command::new(&state.path);
-    if !state.verbose {
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-
-    cmd.env("SCYLLA_CONF", &conf_dir);
-
-    if !seeds.is_empty() {
-        cmd.arg("--seed-provider-parameters")
-            .arg(format!("seeds={seeds}"));
-    }
-
-    if !node_config.primary_vs_uris.is_empty() {
-        cmd.arg("--vector-store-primary-uri")
-            .arg(node_config.primary_vs_uris.join(","));
-    }
-
-    if !node_config.secondary_vs_uris.is_empty() {
-        cmd.arg("--vector-store-secondary-uri")
-            .arg(node_config.secondary_vs_uris.join(","));
-    }
-
-    let db_ip = node_config.db_ip;
-
-    cmd.arg("--options-file")
-        .arg(&conf)
-        .arg("--workdir")
-        .arg(path)
-        .arg("--listen-address")
-        .arg(db_ip.to_string())
-        .arg("--rpc-address")
-        .arg(db_ip.to_string())
-        .arg("--api-address")
-        .arg(db_ip.to_string())
-        .arg("--log-to-stdout")
-        .arg("true")
-        .arg("--logger-ostream-type")
-        .arg("stdout")
-        .arg("--endpoint-snitch")
-        .arg("GossipingPropertyFileSnitch")
-        .args(node_config.args.clone())
-        .pipe(|cmd| {
-            if let Some((uid, gid)) = get_scylla_user() {
-                info!("Starting ScyllaDB process as user 'scylla' ({uid:?}, {gid:?})");
-                cmd.uid(*uid).gid(*gid);
-            }
-            cmd
-        })
-        .spawn()
-        .expect("start: failed to spawn scylladb")
+    state
+        .target
+        .run(node_config, path, &conf_dir, &conf, seeds, state.verbose)
+        .await
 }
 
 #[framed]
@@ -466,11 +631,6 @@ async fn start(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
     for (i, node_config) in node_configs.iter().enumerate() {
         let workdir = TempDir::new_in(&state.tempdir)
             .expect("start: failed to create temporary directory for scylladb");
-        if let Some((uid, gid)) = get_scylla_user() {
-            info!("Change owner of a ScyllaDB workdir to the 'scylla' user ({uid:?}, {gid:?})");
-            unix::fs::chown(workdir.path(), Some(*uid), Some(*gid))
-                .expect("start: failed to change ownership of scylladb workdir");
-        }
         let rack = format!("rack{}", i + 1);
         let seeds = seed_ip.to_string();
 
@@ -483,11 +643,11 @@ async fn start(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
             node_config.secondary_vs_uris
         );
 
-        let child = run_node(node_config, &seeds, workdir.path(), &rack, state).await;
+        let handler = run_node(node_config, &seeds, workdir.path(), &rack, state).await;
 
         state.nodes.push(NodeState {
             db_ip: node_config.db_ip,
-            child: Some(child),
+            handler: Some(handler),
             workdir: Some(workdir),
         });
     }
@@ -502,14 +662,8 @@ async fn start(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
 #[framed]
 async fn stop(state: &mut State) {
     for node in &mut state.nodes {
-        if let Some(mut child) = node.child.take() {
-            child
-                .start_kill()
-                .expect("stop: failed to send SIGTERM to scylladb process");
-            child
-                .wait()
-                .await
-                .expect("stop: failed to wait for scylladb process to exit");
+        if let Some(mut handler) = node.handler.take() {
+            handler.kill().await;
         }
         node.workdir = None;
     }
@@ -519,14 +673,8 @@ async fn stop(state: &mut State) {
 #[framed]
 async fn down(state: &mut State) {
     for node in &mut state.nodes {
-        if let Some(mut child) = node.child.take() {
-            child
-                .start_kill()
-                .expect("down: failed to send SIGTERM to scylladb process");
-            child
-                .wait()
-                .await
-                .expect("down: failed to wait for scylladb process to exit");
+        if let Some(mut handler) = node.handler.take() {
+            handler.kill().await;
         }
     }
 }
@@ -534,31 +682,20 @@ async fn down(state: &mut State) {
 #[framed]
 async fn down_node(state: &mut State, db_ip: Ipv4Addr) {
     if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip)
-        && let Some(mut child) = node.child.take()
+        && let Some(mut handler) = node.handler.take()
     {
-        child
-            .start_kill()
-            .expect("down_node: failed to send SIGTERM to scylladb process");
-        child
-            .wait()
-            .await
-            .expect("down_node: failed to wait for scylladb process to exit");
+        handler.kill().await;
     }
 }
 
 #[framed]
 async fn wait_for_node(state: &State, ip: Ipv4Addr) -> bool {
-    let mut cmd = Command::new(&state.path);
-    cmd.arg("nodetool")
-        .arg("-h")
-        .arg(ip.to_string())
-        .arg("status");
-
     loop {
         if String::from_utf8_lossy(
-            &cmd.output()
+            &state
+                .target
+                .run_with_args(["nodetool", "-h", &ip.to_string(), "status"])
                 .await
-                .expect("start: failed to run nodetool")
                 .stdout,
         )
         .lines()
@@ -636,7 +773,7 @@ async fn up(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
     for (i, path) in nodes.into_iter() {
         let rack = format!("rack{}", i + 1);
         let child = run_node(&node_configs[i], &seed_ip, &path, &rack, state).await;
-        state.nodes[i].child = Some(child);
+        state.nodes[i].handler = Some(child);
     }
 }
 
@@ -658,7 +795,7 @@ async fn up_node(node_config: ScyllaNodeConfig, state: &mut State) {
         let rack = format!("rack{}", i + 1);
         let path = node.workdir.as_ref().unwrap().path().to_path_buf();
         let child = run_node(&node_config, &seed_ip, &path, &rack, state).await;
-        state.nodes[i].child = Some(child);
+        state.nodes[i].handler = Some(child);
     }
 }
 
@@ -666,32 +803,18 @@ async fn up_node(node_config: ScyllaNodeConfig, state: &mut State) {
 async fn flush(state: &State) {
     for node in &state.nodes {
         info!("Flushing node {}", node.db_ip);
-        let mut cmd = Command::new(&state.path);
-        cmd.arg("nodetool")
-            .arg("-h")
-            .arg(node.db_ip.to_string())
-            .arg("flush");
+        let output = state
+            .target
+            .run_with_args(["nodetool", "-h", &node.db_ip.to_string(), "flush"])
+            .await;
 
-        let output = cmd
-            .output()
-            .await
-            .expect("flush: failed to run nodetool flush");
-
-        if !output.status.success() {
+        if output.exit_code != 0 {
             let stderr = String::from_utf8_lossy(&output.stderr);
             tracing::error!("nodetool flush failed on {}: {}", node.db_ip, stderr);
         } else {
             info!("Flush completed on node {}", node.db_ip);
         }
     }
-}
-
-fn get_scylla_user() -> Option<(Uid, Gid)> {
-    Users::new_with_refreshed_list()
-        .list()
-        .iter()
-        .find(|u| u.name() == "scylla")
-        .map(|user| (user.id().clone(), user.group_id()))
 }
 
 /// Checks if the file exists and is executable.
