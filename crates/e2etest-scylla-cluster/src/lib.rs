@@ -9,11 +9,23 @@
 
 use async_backtrace::frame;
 use async_backtrace::framed;
+use nix::errno::Errno;
+use nix::fcntl;
+use nix::fcntl::OFlag;
+use nix::mount;
+use nix::mount::MsFlags;
+use nix::sched;
+use nix::sys::stat::Mode;
+use nix::unistd;
+use std::ffi::CString;
 use std::ffi::OsStr;
+use std::io;
+use std::iter;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
 use tap::Tap;
@@ -21,9 +33,10 @@ use tempfile::TempDir;
 use testcontainers::ContainerAsync;
 use testcontainers::GenericImage;
 use testcontainers::ImageExt;
-use testcontainers::core::Mount;
-use testcontainers::core::WaitFor;
-use testcontainers::core::wait::ExitWaitStrategy;
+use testcontainers::bollard::plugin::Mount;
+use testcontainers::bollard::plugin::MountBindOptions;
+use testcontainers::bollard::plugin::MountBindOptionsPropagationEnum;
+use testcontainers::bollard::plugin::MountType;
 use testcontainers::runners::AsyncRunner;
 use tokio::fs;
 use tokio::process::Child;
@@ -34,6 +47,7 @@ use tokio::time;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
+use tracing::error;
 use tracing::info;
 
 const DEFAULT_SCYLLA_CQL_PORT: u16 = 9042;
@@ -220,14 +234,14 @@ impl ScyllaClusterExt for mpsc::Sender<ScyllaCluster> {
 /// tag).
 #[framed]
 pub async fn new(
-    target: String,
+    target_name: String,
     default_conf: PathBuf,
     tempdir: PathBuf,
     verbose: bool,
 ) -> mpsc::Sender<ScyllaCluster> {
     let (tx, mut rx) = mpsc::channel(10);
 
-    let target = Target::new(target).await;
+    let (target, docker_export) = prepare_target(target_name, &tempdir).await;
     assert!(
         file_exists(&default_conf).await,
         "scylla config '{default_conf:?}' does not exist"
@@ -246,6 +260,16 @@ pub async fn new(
             info!("Final shutting down the scylla cluster...");
             stop(&mut state).await;
 
+            if let Some(DockerExport {
+                dir: _dir,
+                container,
+            }) = docker_export
+            {
+                container
+                    .stop()
+                    .await
+                    .expect("failed to stop scylla container");
+            }
             debug!("finished");
         })
         .instrument(debug_span!("db")),
@@ -254,80 +278,342 @@ pub async fn new(
     tx
 }
 
-struct Output {
-    exit_code: i32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+enum ChrootError {
+    Unshare = 1,
+    SetHostname,
+    MountRoot,
+    MkDir,
+    Touch,
+    MountBind,
+    Chroot,
+    Chdir,
+}
+
+impl ChrootError {
+    const MASK_LEN: u32 = 24;
+    const MASK_SYS_ERROR: i32 = (u32::MAX >> (u32::BITS - Self::MASK_LEN)) as i32;
+    const MASK_CHROOT_ERROR: i32 = !Self::MASK_SYS_ERROR;
+
+    fn encode(self, err: io::Error) -> io::Error {
+        let errno = err.raw_os_error().unwrap_or(0) & Self::MASK_SYS_ERROR;
+        io::Error::from_raw_os_error(errno | ((self as i32) << Self::MASK_LEN))
+    }
+
+    fn decode(err: io::Error) -> (Option<Self>, io::Error) {
+        let Some(errno) = err.raw_os_error() else {
+            return (None, err);
+        };
+        let err_chroot = errno & Self::MASK_CHROOT_ERROR;
+        if err_chroot == 0 {
+            return (None, err);
+        }
+        (
+            match err_chroot >> Self::MASK_LEN {
+                x if x == Self::Unshare as i32 => Some(Self::Unshare),
+                x if x == Self::SetHostname as i32 => Some(Self::SetHostname),
+                x if x == Self::MountRoot as i32 => Some(Self::MountRoot),
+                x if x == Self::MountBind as i32 => Some(Self::MountBind),
+                x if x == Self::MkDir as i32 => Some(Self::MkDir),
+                x if x == Self::Touch as i32 => Some(Self::Touch),
+                x if x == Self::Chroot as i32 => Some(Self::Chroot),
+                x if x == Self::Chdir as i32 => Some(Self::Chdir),
+                _ => None,
+            },
+            io::Error::from_raw_os_error(errno & Self::MASK_SYS_ERROR),
+        )
+    }
+}
+
+fn panic_on_command_error(name: &str, err: io::Error) -> ! {
+    let (unshare_err, err) = ChrootError::decode(err);
+    match unshare_err {
+        Some(ChrootError::Unshare) => {
+            error!("{name}: Failed to unshare: {err}")
+        }
+        Some(ChrootError::SetHostname) => {
+            error!("{name}: Failed to set hostname: {err}")
+        }
+        Some(ChrootError::MountRoot) => {
+            error!("{name}: Failed to mount private root: {err}")
+        }
+        Some(ChrootError::MkDir) => {
+            error!("{name}: Failed to make directory: {err}")
+        }
+        Some(ChrootError::Touch) => {
+            error!("{name}: Failed to touch file: {err}")
+        }
+        Some(ChrootError::MountBind) => {
+            error!("{name}: Failed to mount bind: {err}")
+        }
+        Some(ChrootError::Chroot) => {
+            error!("{name}: Failed to chroot: {err}")
+        }
+        Some(ChrootError::Chdir) => {
+            error!("{name}: Failed to chdir: {err}")
+        }
+        None => {
+            error!("{name}: {err}")
+        }
+    }
+    panic!("error while executing command");
+}
+
+trait WithinChroot {
+    fn within_chroot(&mut self, rootfs: &Path, binds: &[(&Path, &Path)]) -> &mut Self;
+}
+
+impl WithinChroot for Command {
+    fn within_chroot(&mut self, rootfs: &Path, binds: &[(&Path, &Path)]) -> &mut Self {
+        let mut dirs_to_create = vec![];
+        let mut files_to_create = vec![];
+        let mut add_recursive = |path: &Path, file: bool| {
+            let parent = if let Some(parent) = path.parent() {
+                parent.iter().fold(rootfs.to_path_buf(), |acc, p| {
+                    let dir = acc.join(p);
+                    dirs_to_create.push(
+                        CString::new(dir.to_string_lossy().as_bytes())
+                            .expect("within_chroot: failed to create CString for directory"),
+                    );
+                    dir
+                })
+            } else {
+                rootfs.to_path_buf()
+            };
+            if file {
+                files_to_create.push(
+                    CString::new(
+                        parent
+                            .join(path.file_name().unwrap())
+                            .to_string_lossy()
+                            .as_bytes(),
+                    )
+                    .expect("within_chroot: failed to create CString for file"),
+                );
+            } else {
+                dirs_to_create.push(
+                    CString::new(
+                        parent
+                            .join(path.file_name().unwrap())
+                            .to_string_lossy()
+                            .as_bytes(),
+                    )
+                    .expect("within_chroot: failed to create CString for directory"),
+                );
+            }
+        };
+
+        add_recursive(Path::new("proc"), false);
+        add_recursive(Path::new("sys"), false);
+        add_recursive(Path::new("dev"), false);
+        add_recursive(Path::new("etc/resolv.conf"), true);
+
+        let binds: Vec<_> = iter::once((
+            CString::new("/proc").expect("within_chroot: failed to create CString for /proc"),
+            CString::new(rootfs.join("proc").to_string_lossy().as_bytes())
+                .expect("within_chroot: failed to create CString for /proc mount point"),
+        ))
+        .chain(iter::once((
+            CString::new("/sys").expect("within_chroot: failed to create CString for /sys"),
+            CString::new(rootfs.join("sys").to_string_lossy().as_bytes())
+                .expect("within_chroot: failed to create CString for /sys mount point"),
+        )))
+        .chain(iter::once((
+            CString::new("/dev").expect("within_chroot: failed to create CString for /dev"),
+            CString::new(rootfs.join("dev").to_string_lossy().as_bytes())
+                .expect("within_chroot: failed to create CString for /dev mount point"),
+        )))
+        .chain(iter::once((
+            CString::new("/etc/resolv.conf")
+                .expect("within_chroot: failed to create CString for /etc/resolv.conf"),
+            CString::new(
+                rootfs
+                    .join("etc")
+                    .join("resolv.conf")
+                    .to_string_lossy()
+                    .as_bytes(),
+            )
+            .expect("within_chroot: failed to create CString for /etc/resolv.conf mount point"),
+        )))
+        .chain(binds.iter().map(|(src, dst)| {
+            let dst = dst.strip_prefix("/").unwrap_or(dst);
+            add_recursive(dst, src.is_file());
+            (
+                CString::new(src.to_string_lossy().as_bytes())
+                    .expect("within_chroot: failed to create CString for bind source"),
+                CString::new(rootfs.join(dst).to_string_lossy().as_bytes())
+                    .expect("within_chroot: failed to create CString for bind destination"),
+            )
+        }))
+        .collect();
+
+        // Sort and deduplicate the directories and files to create
+        dirs_to_create.sort();
+        dirs_to_create.dedup();
+        files_to_create.sort();
+        files_to_create.dedup();
+
+        let rootfs = CString::new(rootfs.to_string_lossy().as_bytes())
+            .expect("within_chroot: failed to create CString for rootfs");
+        unsafe {
+            // SAFETY: We must not allocate memory in this closure, as it is called after fork()
+            // and before exec().
+            self.pre_exec(move || {
+                sched::unshare(sched::CloneFlags::CLONE_NEWNS | sched::CloneFlags::CLONE_NEWUTS)
+                    .map_err(|err| ChrootError::Unshare.encode(err.into()))?;
+
+                unistd::sethostname("e2etest-chroot")
+                    .map_err(|e| ChrootError::SetHostname.encode(e.into()))?;
+
+                // Stop mount events from propagating back to the host
+                mount::mount(
+                    None::<&str>,
+                    &b"/"[..],
+                    None::<&str>,
+                    MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+                    None::<&str>,
+                )
+                .map_err(|err| ChrootError::MountRoot.encode(err.into()))?;
+
+                for dir in dirs_to_create.iter() {
+                    if let Err(err) = unistd::mkdir(dir.as_c_str(), Mode::from_bits_truncate(0o755))
+                        && err != Errno::EEXIST
+                    {
+                        return Err(ChrootError::MkDir.encode(err.into()));
+                    }
+                }
+                for file in files_to_create.iter() {
+                    fcntl::open(
+                        file.as_c_str(),
+                        OFlag::O_CREAT | OFlag::O_WRONLY | OFlag::O_CLOEXEC,
+                        Mode::from_bits_truncate(0o644),
+                    )
+                    .map_err(|err| ChrootError::Touch.encode(err.into()))?;
+                }
+
+                for (src, dst) in binds.iter() {
+                    mount::mount(
+                        Some(src.as_c_str()),
+                        dst.as_c_str(),
+                        None::<&str>,
+                        MsFlags::MS_BIND | MsFlags::MS_REC,
+                        None::<&str>,
+                    )
+                    .map_err(|err| ChrootError::MountBind.encode(err.into()))?;
+                }
+
+                unistd::chroot(rootfs.as_c_str())
+                    .map_err(|err| ChrootError::Chroot.encode(err.into()))?;
+
+                unistd::chdir(&b"/"[..]).map_err(|err| ChrootError::Chdir.encode(err.into()))?;
+
+                Ok(())
+            });
+        }
+        self
+    }
 }
 
 enum Target {
     Binary(PathBuf),
-    Container(GenericImage),
+    ContainerRoot(PathBuf),
 }
 
 impl Target {
-    async fn new(name: String) -> Self {
-        let path = PathBuf::from(&name);
-        if executable_exists(&path).await {
-            Self::Binary(path)
-        } else {
-            let image = if let Some((name, tag)) = name.split_once(':') {
-                GenericImage::new(name, tag)
-            } else {
-                GenericImage::new(name.as_str(), "latest")
-            };
-            Self::Container(image)
+    const CONTAINER_CERT_PATH: &'static str = "/e2etest/cert.pem";
+    const CONTAINER_KEY_PATH: &'static str = "/e2etest/key.pem";
+
+    fn cert_key<'a>(&self, node_config: &'a ScyllaNodeConfig) -> Option<(&'a Path, &'a Path)> {
+        match self {
+            Target::Binary(_) => {
+                if let (Some(cert), Some(key)) = (&node_config.cert_path, &node_config.key_path) {
+                    Some((cert, key))
+                } else {
+                    None
+                }
+            }
+            Target::ContainerRoot(_) => {
+                if let (Some(_), Some(_)) = (&node_config.cert_path, &node_config.key_path) {
+                    Some((
+                        Path::new(Self::CONTAINER_CERT_PATH),
+                        Path::new(Self::CONTAINER_KEY_PATH),
+                    ))
+                } else {
+                    None
+                }
+            }
         }
     }
+}
 
-    async fn run_with_args(
+struct DockerExport {
+    dir: TempDir,
+    container: ContainerAsync<GenericImage>,
+}
+
+async fn prepare_target(name: String, tempdir: &Path) -> (Target, Option<DockerExport>) {
+    let path = PathBuf::from(&name);
+    if executable_exists(&path).await {
+        (Target::Binary(path), None)
+    } else {
+        let dir = TempDir::new_in(tempdir)
+            .expect("prepare_target: failed to create temporary directory for docker export");
+        let rootfs = dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs)
+            .await
+            .expect("prepare_target: failed to create rootfs directory");
+        let image = if let Some((name, tag)) = name.split_once(':') {
+            GenericImage::new(name, tag)
+        } else {
+            GenericImage::new(name.as_str(), "latest")
+        };
+        let mount = Mount::default().tap_mut(|m| {
+            m.source = Some(dir.path().to_string_lossy().to_string());
+            m.target = Some("/export".to_string());
+            m.typ = Some(MountType::BIND);
+            m.bind_options = Some(MountBindOptions::default().tap_mut(|bo| {
+                bo.propagation = Some(MountBindOptionsPropagationEnum::RSHARED);
+            }));
+        });
+        let container = image
+            .with_entrypoint("sh")
+            .with_privileged(true)
+            .with_user("root")
+            .with_cmd(["-c", "mount --bind / /export/rootfs && exec sleep infinity"])
+            .with_host_config_modifier(move |hc| {
+                hc.mounts.get_or_insert_with(Vec::new).push(mount.clone());
+            })
+            .start()
+            .await
+            .expect("prepare_target: failed to start scylla container");
+        (
+            Target::ContainerRoot(rootfs),
+            Some(DockerExport { dir, container }),
+        )
+    }
+}
+
+impl Target {
+    async fn scylla(
         &self,
         args: impl IntoIterator<Item = impl Into<String> + AsRef<OsStr>>,
     ) -> Output {
-        match self {
+        let mut cmd = match self {
             Target::Binary(path) => {
-                let output = Command::new(path)
-                    .args(args)
-                    .output()
-                    .await
-                    .expect("run_with_args: failed to execute scylla");
-                let exit_code = output
-                    .status
-                    .code()
-                    .expect("run_with_args: scylla exited without an exit code");
-                Output {
-                    exit_code,
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                }
+                let mut cmd = Command::new(path);
+                cmd.args(args);
+                cmd
             }
-            Target::Container(image) => {
-                let container = image
-                    .clone()
-                    .with_wait_for(WaitFor::exit(ExitWaitStrategy::new()))
-                    .with_cmd(["--version"])
-                    .start()
-                    .await
-                    .expect("run_with_args: failed to start scylla container");
-                let exit_code = container
-                    .exit_code()
-                    .await
-                    .expect("run_with_args: failed to wait for scylla container to exit")
-                    .expect("run_with_args: scylla container exited without an exit code")
-                    as i32;
-                let stdout = container
-                    .stdout_to_vec()
-                    .await
-                    .expect("run_with_args: failed to capture stdout from scylla container");
-                let stderr = container
-                    .stderr_to_vec()
-                    .await
-                    .expect("run_with_args: failed to capture stderr from scylla container");
-                Output {
-                    exit_code,
-                    stdout,
-                    stderr,
-                }
+            Target::ContainerRoot(path) => {
+                let mut cmd = Command::new("/usr/bin/scylla");
+                cmd.args(args).within_chroot(path, &[]);
+                cmd
+            }
+        };
+
+        match cmd.output().await {
+            Ok(output) => output,
+            Err(err) => {
+                panic_on_command_error("scylla", err);
             }
         }
     }
@@ -340,9 +626,10 @@ impl Target {
         conffile: &Path,
         seeds: &str,
         verbose: bool,
-    ) -> Handler {
+    ) -> Child {
         let db_ip = node_config.db_ip;
         let mut args = vec![
+            "--listen-address".to_string(),
             db_ip.to_string(),
             "--rpc-address".to_string(),
             db_ip.to_string(),
@@ -374,21 +661,14 @@ impl Target {
         .tap_mut(|args| {
             args.extend(node_config.args.clone());
         });
-        match self {
+
+        let mut cmd = match self {
             Target::Binary(path) => {
-                let mut cmd = Command::new(path);
-                if !verbose {
-                    cmd.stdout(Stdio::null()).stderr(Stdio::null());
-                }
-
-                cmd.env("SCYLLA_CONF", confdir);
-
                 args.extend([
                     "--options-file".to_string(),
                     conffile.to_string_lossy().to_string(),
                     "--workdir".to_string(),
                     workdir.to_string_lossy().to_string(),
-                    "--listen-address".to_string(),
                 ]);
                 if !seeds.is_empty() {
                     args.extend([
@@ -397,80 +677,53 @@ impl Target {
                     ]);
                 }
 
-                let child = cmd
-                    .args(args)
-                    .spawn()
-                    .expect("start: failed to spawn scylladb");
-                Handler::Binary(child)
+                let mut cmd = Command::new(path);
+                cmd.env("SCYLLA_CONF", confdir);
+                cmd
             }
 
-            Target::Container(image) => {
+            Target::ContainerRoot(rootfs) => {
+                let mut mounts = vec![
+                    (workdir, Path::new("/e2etest/workdir")),
+                    (confdir, Path::new("/e2etest/confdir")),
+                    (conffile, Path::new("/e2etest/conffile")),
+                ];
                 args.extend([
                     "--options-file".to_string(),
-                    conffile.to_string_lossy().to_string(),
+                    "/e2etest/conffile".to_string(),
                     "--workdir".to_string(),
-                    workdir.to_string_lossy().to_string(),
-                    "--listen-address".to_string(),
+                    "/e2etest/workdir".to_string(),
                 ]);
                 if !seeds.is_empty() {
                     args.extend(["--seeds".to_string(), seeds.to_string()]);
                 }
-                let container = image
-                    .clone()
-                    .with_network("host")
-                    .with_env_var("SCYLLA_CONF", confdir.to_string_lossy().to_string())
-                    .with_mount(Mount::bind_mount(
-                        workdir.to_string_lossy(),
-                        "/e2etest/workdir",
-                    ))
-                    .with_mount(Mount::bind_mount(
-                        confdir.to_string_lossy(),
-                        "/e2etest/confdir",
-                    ))
-                    .with_mount(Mount::bind_mount(
-                        conffile.to_string_lossy(),
-                        "/e2etest/conffile",
-                    ))
-                    .with_cmd(args)
-                    .start()
-                    .await
-                    .expect("run: failed to start scylla container");
-                Handler::Container(Box::new(container))
-            }
-        }
-    }
-}
+                if let Some((container_cert, container_key)) = self.cert_key(node_config)
+                    && let (Some(cert), Some(key)) = (&node_config.cert_path, &node_config.key_path)
+                {
+                    mounts.extend([
+                        (cert.as_path(), container_cert),
+                        (key.as_path(), container_key),
+                    ]);
+                }
 
-enum Handler {
-    Binary(Child),
-    Container(Box<ContainerAsync<GenericImage>>),
-}
-
-impl Handler {
-    async fn kill(&mut self) {
-        match self {
-            Handler::Binary(child) => {
-                child
-                    .start_kill()
-                    .expect("kill: failed to send SIGTERM to scylladb process");
-                child
-                    .wait()
-                    .await
-                    .expect("kill: failed to wait for scylladb process to exit");
+                let mut cmd = Command::new("/usr/bin/scylla");
+                cmd.within_chroot(rootfs, &mounts);
+                cmd.env("SCYLLA_CONF", "/e2etest/confdir");
+                cmd
             }
-            Handler::Container(container) => {
-                container
-                    .stop()
-                    .await
-                    .expect("kill: failed to stop scylladb container");
-            }
+        };
+        if !verbose {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
+        cmd.args(args)
+            .spawn()
+            .expect("start: failed to spawn scylladb")
     }
 }
 
 struct NodeState {
     db_ip: Ipv4Addr,
-    handler: Option<Handler>,
+    child: Option<Child>,
     workdir: Option<TempDir>,
 }
 
@@ -486,7 +739,7 @@ struct State {
 impl State {
     #[framed]
     async fn new(target: Target, default_conf: PathBuf, tempdir: PathBuf, verbose: bool) -> Self {
-        let version = String::from_utf8_lossy(&target.run_with_args(["--version"]).await.stdout)
+        let version = String::from_utf8_lossy(&target.scylla(["--version"]).await.stdout)
             .trim()
             .to_string();
 
@@ -559,13 +812,14 @@ async fn run_node(
     path: &Path,
     rack: &str,
     state: &State,
-) -> Handler {
-    let has_tls = node_config.cert_path.is_some() && node_config.key_path.is_some();
+) -> Child {
+    let cert_key = state.target.cert_key(node_config);
+    let has_tls = cert_key.is_some();
     let has_extra = node_config.extra_config.is_some();
 
     let conf = if has_tls || has_extra {
         let mut config = Vec::new();
-        if let (Some(cert), Some(key)) = (&node_config.cert_path, &node_config.key_path) {
+        if let Some((cert, key)) = cert_key {
             config.extend_from_slice(
                 format!(
                     r#"client_encryption_options:
@@ -643,11 +897,11 @@ async fn start(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
             node_config.secondary_vs_uris
         );
 
-        let handler = run_node(node_config, &seeds, workdir.path(), &rack, state).await;
+        let child = run_node(node_config, &seeds, workdir.path(), &rack, state).await;
 
         state.nodes.push(NodeState {
             db_ip: node_config.db_ip,
-            handler: Some(handler),
+            child: Some(child),
             workdir: Some(workdir),
         });
     }
@@ -662,8 +916,14 @@ async fn start(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
 #[framed]
 async fn stop(state: &mut State) {
     for node in &mut state.nodes {
-        if let Some(mut handler) = node.handler.take() {
-            handler.kill().await;
+        if let Some(mut child) = node.child.take() {
+            child
+                .start_kill()
+                .expect("kill: failed to send SIGTERM to scylladb process");
+            child
+                .wait()
+                .await
+                .expect("kill: failed to wait for scylladb process to exit");
         }
         node.workdir = None;
     }
@@ -673,8 +933,14 @@ async fn stop(state: &mut State) {
 #[framed]
 async fn down(state: &mut State) {
     for node in &mut state.nodes {
-        if let Some(mut handler) = node.handler.take() {
-            handler.kill().await;
+        if let Some(mut child) = node.child.take() {
+            child
+                .start_kill()
+                .expect("kill: failed to send SIGTERM to scylladb process");
+            child
+                .wait()
+                .await
+                .expect("kill: failed to wait for scylladb process to exit");
         }
     }
 }
@@ -682,9 +948,15 @@ async fn down(state: &mut State) {
 #[framed]
 async fn down_node(state: &mut State, db_ip: Ipv4Addr) {
     if let Some(node) = state.nodes.iter_mut().find(|n| n.db_ip == db_ip)
-        && let Some(mut handler) = node.handler.take()
+        && let Some(mut child) = node.child.take()
     {
-        handler.kill().await;
+        child
+            .start_kill()
+            .expect("kill: failed to send SIGTERM to scylladb process");
+        child
+            .wait()
+            .await
+            .expect("kill: failed to wait for scylladb process to exit");
     }
 }
 
@@ -694,7 +966,7 @@ async fn wait_for_node(state: &State, ip: Ipv4Addr) -> bool {
         if String::from_utf8_lossy(
             &state
                 .target
-                .run_with_args(["nodetool", "-h", &ip.to_string(), "status"])
+                .scylla(["nodetool", "-h", &ip.to_string(), "status"])
                 .await
                 .stdout,
         )
@@ -773,7 +1045,7 @@ async fn up(node_configs: Vec<ScyllaNodeConfig>, state: &mut State) {
     for (i, path) in nodes.into_iter() {
         let rack = format!("rack{}", i + 1);
         let child = run_node(&node_configs[i], &seed_ip, &path, &rack, state).await;
-        state.nodes[i].handler = Some(child);
+        state.nodes[i].child = Some(child);
     }
 }
 
@@ -795,7 +1067,7 @@ async fn up_node(node_config: ScyllaNodeConfig, state: &mut State) {
         let rack = format!("rack{}", i + 1);
         let path = node.workdir.as_ref().unwrap().path().to_path_buf();
         let child = run_node(&node_config, &seed_ip, &path, &rack, state).await;
-        state.nodes[i].handler = Some(child);
+        state.nodes[i].child = Some(child);
     }
 }
 
@@ -805,10 +1077,10 @@ async fn flush(state: &State) {
         info!("Flushing node {}", node.db_ip);
         let output = state
             .target
-            .run_with_args(["nodetool", "-h", &node.db_ip.to_string(), "flush"])
+            .scylla(["nodetool", "-h", &node.db_ip.to_string(), "flush"])
             .await;
 
-        if output.exit_code != 0 {
+        if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             tracing::error!("nodetool flush failed on {}: {}", node.db_ip, stderr);
         } else {

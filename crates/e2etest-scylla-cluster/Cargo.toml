@@ -12,6 +12,7 @@ license.workspace = true
 
 [dependencies]
 async-backtrace.workspace = true
+nix.workspace = true
 tap.workspace = true
 tempfile.workspace = true
 testcontainers.workspace = true

@@ -759,6 +759,7 @@ name = "e2etest-scylla-cluster"
 version = "0.1.1"
 dependencies = [
  "async-backtrace",
+ "nix",
  "tap",
  "tempfile",
  "testcontainers",
